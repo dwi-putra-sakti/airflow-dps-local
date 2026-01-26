@@ -7,20 +7,29 @@ import calendar
 from contextlib import contextmanager
 from sqlalchemy import create_engine
 from sqlalchemy import Integer, String, CHAR, Date, Text, text, Float
+from dateutil.relativedelta import relativedelta
 import os
-from datetime import datetime
+from datetime import datetime, date
+from modules.db_connection import get_engine, get_db
 from modules.queries import (df__penju, df__tokoawal, df__transaction, df__cus, get_monthly_sales_data, 
-                             df__sales_thru_24, df__sales_thru_25, df__sales_thru_25_count_artikel, df__artsizecode, df__gdmd, fetch_data_margin,
+                             df__sales_thru_24, df__sales_thru_25, df__sales_thru_25_count_artikel, df_tglsosa,
+                             df__artsizecode, df__gdmd, fetch_data_margin,list_to_sql_in,df__sales_thru_26,
                              df__sales_, df__customers_pb, df__artikel_pb, df__artikel_pb_read, 
+                             df__tgl_input_penju,df__stock_today_all_store,df__stock_wh,
                              df__customers_pb_read, df__cus_user, df__sales_invoice,  df__sales_bz_disc2nd,
-                             df__sales_bz, df__sales_consi_disc2nd, df__sales_online_disc2nd, df__otsdm, df__otsdo,
-                             df__penju_today, df__artikel_status, df__tglso_, df__tglsa_, df__whtype_name, df__aging_gudang ) 
+                             df__sales_bz, df__sales_consi_disc2nd, df__sales_online_disc2nd, df__user,
+                             df__otsdm, df__otsdo,df__pb_penjualan_,df__customers_pb_, df_artikel_pb_, 
+                             df__otsob,df__aging,df__otsdo_rt,df__aging_pb_,df__aging_gudang_pb,
+                             df__penju_today, df__artikel_status, df__tglso_, df__tglsa_, df__whtype_name, 
+                             df__aging_gudang ) 
 from modules.proses import (save_to_sql, add_index_and_foreign_keys, clean_and_transform_data, 
                             insert_disc2_grouping, insert_margin, rename_col_py_to_sql, insert_pk,
                             get_tgl, get_stock, get_stock_data, merge_and_calculate, merge_detail, 
                             generate_rename_dict,trx_rt, process_data_margin,rename_col_sql_to_xlsx_gis,
-                            get_artikel_md, get_new_or_changed_rows,upsert_data, process_data_cus,
-                            sls_disctok, proc_pivot_table_n, add_ornal)
+                            get_artikel_md, get_new_or_changed_rows,upsert_data, process_data_cus,delete_rows,
+                            sls_disctok, proc_pivot_table_n, add_ornal,ensure_stock_columns,
+                            proc_add_aging,proc_pivot_table,get_stock_data_parquet)
+
 def margin_tb(year):
     df_trx, df_artimp, df_artred, df_atrxu, df_mrgincat, df_mrgin = fetch_data_margin(year)
     df_trx_final = process_data_margin(df_trx, df_artimp, df_artred, df_atrxu, df_mrgincat, df_mrgin)
@@ -50,6 +59,15 @@ def sales_to_sql(year):
     df['fn_sim_amount'] = np.where(df['fc_status'] == "X", df['fn_totalpenjualan'], df['fn_nett_amount'])
     df['fn_dpp'] = df['fn_nett_amount']/1.11
     df['fn_dpp2'] = df['fn_sim_amount']/1.11
+    # df_tglimput=df__tgl_input_penju(year)
+    
+    df_art=df_artikel_pb_('fv_artsizecode, fv_catname',distinct=False,where='')
+    df=df.merge(df_art,how='left',on='fv_artsizecode')
+    df=df.rename(columns={'fn_hargasatuan':'fm_amount','fv_status_artikel':'fv_status'})
+    df['fv_ornal'] = df.apply(add_ornal, axis=1)
+    df=df.rename(columns={'fm_amount':'fn_hargasatuan','fv_status':'fv_status_artikel'}).drop(columns='fv_catname')
+    
+    # df=df.merge(df_tglimput, how='left',on='fv_nopenjualan')
     table_name = f"pb_penjualan_{year}"
     save_to_sql(df, table_name, 'imp')
 
@@ -94,38 +112,32 @@ def get_stock_monthly(tglEND,expot_excel):
         else:
             month += 1
     bulan = calendar.month_name[month].lower()[:3]
-    expot_excel = expot_excel.lower()
-    if expot_excel not in ['yes', 'no']:
-        raise ValueError("Parameter 'expot_excel' harus berupa 'yes' atau 'no'.")
+    # expot_excel = expot_excel.lower()
     tglnow = datetime.today().date() # Tanggal Perhari Ini 
     df_tokoawal = df__tokoawal()
     idwhtoko_list_awal = df_tokoawal['fn_whconsiid'].tolist() # Ubah kedalam List
-
-    # Mencari tanggal SO terakhir utnuk masing-masing toko yang masih buka per tanggal yang dipilih
-    df_tglLSO = pd.concat([get_tgl(idwhtoko, tglnow, tglEND) for idwhtoko in idwhtoko_list_awal])
+    ## tanggal so/sa DATE_FORMAT(fd_tglinject, '%%Y-%%m-%%d') AS fd_tglflagIndo
+    df_tglLSO=df_tglsosa(idwhtoko_list_awal,tglEND)
     df_tglLSO['fd_tglflagIndo'] = pd.to_datetime(df_tglLSO['fd_tglflagIndo'])
 
     if tglEND2 > tglnow:  # Jika tanggal yang dipilih lebih besar dari hari ini
         df_tglLSO.loc[df_tglLSO['fc_status']=="T",'fd_tglflagIndo'] -= pd.Timedelta(days=1)
 
     df_tglLSO['fd_tglflagIndo'] = df_tglLSO['fd_tglflagIndo'].dt.strftime('%Y-%m-%d')
+    df_tglLSO=df_tglLSO.loc[~df_tglLSO['fd_tglflagIndo'].isna()]
     idwhtoko_list = df_tglLSO['fn_whconsiid'].tolist() # Ubah kedalam List untuk kode toko
     tgl_list = df_tglLSO['fd_tglflagIndo'].tolist() # Ubah kedalam List untuk tanggal SO terakhir
+    fv_stat=df_tglLSO['fv_stat'].tolist()
 
     # Mencari Stock pertanggal yang dipilih dengan menjumlah stock awal SO terakhir dengan transaksi dari SO terakhir sampai tanggal yang dipilih
     df_tok = pd.DataFrame() # Dataframe Kosong
-    for idwhtoko, tglSTR in zip(idwhtoko_list, tgl_list): # Looping untuk masing-masing toko dan tanggal SO terakhir
-        df_stock = get_stock(idwhtoko, tglSTR, tglEND) # Mencari Stock awal
-        df_stock['fv_artsizecode'] = df_stock['fv_artsizecode'].str.upper()
-        df_stock['fv_artsizecode'] = df_stock['fv_artsizecode'].replace({'BBRD103V042333-': 'BBRD103V042333'})
-        df_transactions = df__transaction(idwhtoko, tglSTR, tglEND) # Mencari semua transaksi
+    for idwhtoko, tglSTR, stat in zip(idwhtoko_list, tgl_list,fv_stat): # Looping untuk masing-masing toko dan tanggal SO terakhir
+        df_transactions = df__transaction(idwhtoko, tglSTR, tglEND,stat) # Mencari semua transaksi
         df_transactions['fv_artsizecode'] = df_transactions['fv_artsizecode'].str.upper()
         df_transactions['fv_artsizecode'] = df_transactions['fv_artsizecode'].replace({'BBRD103V042333-': 'BBRD103V042333'})
-        df_total = pd.concat([df_stock, df_transactions]).groupby('fv_artsizecode').sum().reset_index() # menjumlah stock awal dan transaksi
-        df_total['fn_whconsiid'] = idwhtoko 
-        df_total['tgltrx'] = tglEND
-        
-        df_tok = pd.concat([df_tok, df_total], ignore_index=True)
+        df_transactions['fn_whconsiid'] = idwhtoko 
+        df_transactions['tgltrx'] = tglEND
+        df_tok = pd.concat([df_tok, df_transactions], ignore_index=True)
     fdate= str(year)[2:4]
     df_tok=df_tok.loc[~((df_tok['fn_whconsiid'].isin([1131,1130,1129]))&(df_tok['qty']==0))]
     df_tok= df_tok[['fn_whconsiid','fv_artsizecode','qty','tgltrx']].rename(columns={'qty':f'stock {bulan}_{fdate}'})
@@ -152,7 +164,113 @@ def get_stock_monthly(tglEND,expot_excel):
     print(f'pb_stock_{bulan}_{fdate} Selesai')
     return df_tok
 
-def get_last_three_months_including_current():
+def write_stock_parquet(df, parquet_base):
+    """
+    parquet_base/
+      tahun=YYYY/
+        bulan=MM/
+          stock.parquet
+    """
+    year = int(df['tahun'].iloc[0])
+    month = int(df['bulan'].iloc[0])
+
+    output_path = os.path.join(
+        parquet_base,
+        f"tahun={year}",
+        f"bulan={str(month).zfill(2)}"
+    )
+    os.makedirs(output_path, exist_ok=True)
+
+    output_file = os.path.join(output_path, "stock.parquet")
+
+    df.to_parquet(
+        output_file,
+        engine="pyarrow",
+        index=False
+    )
+
+    print(f"✅ Parquet saved: {output_file}")
+
+def get_stock_monthly_parquet(tglEND,expot_excel):
+    '''Main Stock Monthly'''
+    tglEND2= datetime.strptime(tglEND, "%Y-%m-%d").date()
+    tglEND = datetime.strptime(tglEND, '%Y-%m-%d').strftime('%Y-%m-%d 23:59:59')
+    # Dapatkan tanggal kemarin
+    today = datetime.now()
+    d2ago = today - timedelta(days=2)
+    # Ubah ke string (format default: YYYY-MM-DD)
+    # kemarin_str = kemarin.strftime("%Y-%m-%d")
+    # d2ago_str = d2ago.strftime("%Y-%m-%d")
+    year = int(tglEND[:4])
+    month = int(tglEND[5:7])
+    day = int(tglEND[8:10])
+    last_day = calendar.monthrange(year, month)[1]
+    if day == last_day:
+        if month == 12:  
+            month = 1
+            year += 1
+        else:
+            month += 1
+    bulan = calendar.month_name[month].lower()[:3]
+    # expot_excel = expot_excel.lower()
+    tglnow = datetime.today().date() # Tanggal Perhari Ini 
+    df_tokoawal = df__tokoawal()
+    idwhtoko_list_awal = df_tokoawal['fn_whconsiid'].tolist() # Ubah kedalam List
+    ## tanggal so/sa DATE_FORMAT(fd_tglinject, '%%Y-%%m-%%d') AS fd_tglflagIndo
+    df_tglLSO=df_tglsosa(idwhtoko_list_awal,tglEND)
+    df_tglLSO['fd_tglflagIndo'] = pd.to_datetime(df_tglLSO['fd_tglflagIndo'])
+
+    if tglEND2 > tglnow:  # Jika tanggal yang dipilih lebih besar dari hari ini
+        df_tglLSO.loc[df_tglLSO['fc_status']=="T",'fd_tglflagIndo'] -= pd.Timedelta(days=1)
+
+    df_tglLSO['fd_tglflagIndo'] = df_tglLSO['fd_tglflagIndo'].dt.strftime('%Y-%m-%d')
+    df_tglLSO=df_tglLSO.loc[~df_tglLSO['fd_tglflagIndo'].isna()]
+    idwhtoko_list = df_tglLSO['fn_whconsiid'].tolist() # Ubah kedalam List untuk kode toko
+    tgl_list = df_tglLSO['fd_tglflagIndo'].tolist() # Ubah kedalam List untuk tanggal SO terakhir
+    fv_stat=df_tglLSO['fv_stat'].tolist()
+
+    # Mencari Stock pertanggal yang dipilih dengan menjumlah stock awal SO terakhir dengan transaksi dari SO terakhir sampai tanggal yang dipilih
+    df_tok = pd.DataFrame() # Dataframe Kosong
+    for idwhtoko, tglSTR, stat in zip(idwhtoko_list, tgl_list,fv_stat): # Looping untuk masing-masing toko dan tanggal SO terakhir
+        df_transactions = df__transaction(idwhtoko, tglSTR, tglEND,stat) # Mencari semua transaksi
+        df_transactions['fv_artsizecode'] = df_transactions['fv_artsizecode'].str.upper()
+        df_transactions['fv_artsizecode'] = df_transactions['fv_artsizecode'].replace({'BBRD103V042333-': 'BBRD103V042333'})
+        df_transactions['fn_whconsiid'] = idwhtoko 
+        df_transactions['tgltrx'] = tglEND
+        df_tok = pd.concat([df_tok, df_transactions], ignore_index=True)
+    fdate= str(year)[2:4]
+    df_tok=df_tok.loc[~((df_tok['fn_whconsiid'].isin([1131,1130,1129]))&(df_tok['qty']==0))]
+    df_tok=df_tok[['fn_whconsiid','fv_artsizecode','qty','tgltrx']].rename(columns={'qty':f'stock {bulan}_{fdate}'})
+    df_tok['tahun'] = year
+    df_tok['bulan'] = month
+    if expot_excel == 'yes':
+        max_rows = 1048570
+        output_file = f'/opt/share/PB DB/pb_stock_{bulan}_{fdate}.xlsx'
+        print(len(df_tok))
+        print(max_rows)
+        if len(df_tok) <= max_rows:
+            # Simpan 1 sheet saja
+            df_tok.to_excel(output_file, index=False)
+        else:
+            # Potong menjadi 2 bagian
+            df1 = df_tok.iloc[:max_rows]
+            df2 = df_tok.iloc[max_rows:]
+            print(df1.info())
+            print(df2.info())
+            with pd.ExcelWriter(output_file) as writer:
+                df1.to_excel(writer, sheet_name='Sheet1', index=False)
+                df2.to_excel(writer, sheet_name='Sheet2', index=False)
+        print(f'pb_stock_{bulan}_{fdate} Selesai')
+        return df_tok
+    elif expot_excel == 'parquet':
+        parquet_base = "/opt/share/PB DB/stock"
+        write_stock_parquet(df_tok, parquet_base)
+
+    print(f'pb_stock_{bulan}_{fdate} Selesai')
+    return df_tok
+
+
+def get_last_three_months_including_current(typefile='excel'):
     timestart = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     print("[INFO] Script get_last_three_months_including_current dimulai.")
     print(f"[INFO] Timestart: {timestart}\n")
@@ -167,40 +285,61 @@ def get_last_three_months_including_current():
         # Dapatkan hari terakhir bulan tersebut
         last_day = calendar.monthrange(target_year, target_month)[1]
         last_dates.append(f"{target_year}-{target_month:02d}-{last_day:02d}")
-    for tgl in last_dates:
-        get_stock_monthly(tgl, 'yes')
-    # Print tanggal yang dipilih sebelum return
+    if typefile== "parquet":
+        for tgl in last_dates:
+            get_stock_monthly_parquet(tgl, typefile)
+    else:
+        for tgl in last_dates:
+            get_stock_monthly(tgl, 'yes')
+        # Print tanggal yang dipilih sebelum return
     print("[INFO] Tanggal yang dipilih:")
     print("\n".join(last_dates))
 
     return last_dates
 
-def stock_and_sales(start_year, end_year):
+def stock_and_sales(start_year, end_year,typefile='excel'):
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     print("\n[INFO] Script stock_and_sales mulai dijalankan.")
     print(f"[INFO] Timestamp: {timestamp}\n")
     base_path = '/opt/share/PB DB/'
     print("Base path:", base_path)
     print(os.path.exists(base_path)) 
-
-    stock_data_25 = get_stock_data(base_path, start_year, end_year)
+    parquet_base = r'/opt/share/PB DB/stock'
+    print(typefile)
+    if typefile=='parquet':
+        stock_data_25 = get_stock_data_parquet(
+            parquet_base,start_year, end_year
+        )
+    else:
+        stock_data_25 = get_stock_data(base_path, start_year, end_year)
     print(stock_data_25.info())
     print("stock_data prosess complite")
+    print(stock_data_25.info())
 
     sales_data_25 = get_monthly_sales_data(start_year, end_year)
     print(sales_data_25.columns)
     print("Sales_data prosess complite")
-    
+    print(sales_data_25.info())
+
     # Menggabungkan dan menghitung
     final_data_25 = merge_and_calculate(sales_data_25, stock_data_25, start_year, end_year)
     print("final_data prosess complite")
+    print(final_data_25.info())
 
     finale_25 = merge_detail(final_data_25, stock_data_25, start_year, end_year )
     tanggal_selesai = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
     print(f"finale prosess complite {tanggal_selesai}")
-
+    print(finale_25.info())
+    finale_25 = finale_25.loc[:, ~finale_25.columns.duplicated()]
+    
+    finale_25=ensure_stock_columns(finale_25)
+    finale_25 = finale_25.drop(
+    columns=[c for c in finale_25.columns if c.lower().startswith('ts_ ')],
+    errors='ignore'
+)
     nama_tabel=f'sales_thru_pb_{str(start_year)[-2:]}'
     # finale_25.to_sql(nama_tabel, engine2, if_exists='replace', index=False, dtype=sql_types)
+    
     save_to_sql(finale_25, nama_tabel, 'imp')
     add_index_and_foreign_keys(
     'imp',
@@ -226,7 +365,7 @@ def stock_and_sales(start_year, end_year):
     print(f"[INFO] Timestamp: {timestamp}")
         # Mendapatkan tanggal saat ini
 
-    save_to_sql(finale_25, nama_tabel, 'read')
+    # save_to_sql(finale_25, nama_tabel, 'read')
     # add_index_and_foreign_keys(nama_tabel, ['fn_whconsiid', 'fv_artsizecode'])
     
     tanggal_selesai = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
@@ -313,6 +452,84 @@ def md_artikel_size():
     # # df_result24.to_excel('df_result24.xlsx')
     # df_result25.to_excel('/opt/share/PB DB/df_result25.xlsx')
 
+def md_artikel_size_26():
+    df_cus= df__cus()
+    # SELECT fn_sizeid, fv_artsizecode, fn_artsizeid from gis_db1.articlesize_tb
+    df_artsq= df__artsizecode(col='fv_artsizecode, fv_barcode, fv_sizename,fv_configname',stat='imp')
+    # print(df_artsq.columns)
+
+    # df_sqq24= df__Sales_thru_24('*')
+    df_sq25= df__sales_thru_26('*')
+   
+    # df_sq24=df_sqq24.copy()
+    # df_sq25=df_sqq25.copy()
+
+    # df_sq24 = pd.merge(df_sq24, df_artsq, on='fv_artsizecode', how='left')
+    # df_sq24 = pd.merge(df_sq24,df_cus,on='fn_whconsiid',how='left')
+    
+    df_sq25 = pd.merge(df_sq25, df_artsq, on='fv_artsizecode', how='left', copy=False)
+    df_sq25.info(memory_usage='deep')
+    df_sq25 = pd.merge(df_sq25,df_cus,on='fn_whconsiid',how='left', copy=False)
+    df_sq25.info(memory_usage='deep')
+    # df_sq24['fn_artsizeid']=df_sq24['fn_artsizeid'].astype(int)
+    df_sq25['fn_artsizeid'] = pd.to_numeric(df_sq25['fn_artsizeid'], downcast='integer')
+    df_sq25.info(memory_usage='deep')
+
+    # df_sq24['pk_id']=df_sq24['fn_whconsiid'].astype(str)+"/"+df_sq24['fn_artsizeid'].astype(str)
+    df_sq25['pk_id']=df_sq25['fn_whconsiid'].astype(str)+"/"+df_sq25['fn_artsizeid'].astype(str)
+    df_sq25=df_sq25.drop(columns=['fn_cusid'])
+    #############
+    # print(df_sq25.columns)  
+    # df_sq24 = generate_rename_dict(2024, 2024, df_sq24)
+    df_sq25 = generate_rename_dict(2026, 2026, df_sq25)
+    # kolom_baru24 = (['pk_id','toko','code toko','artikel','size'] + 
+    #                 [col for col in df_sq24.columns if col not in 
+    #                 ['pk_id','toko','code toko','artikel', 'size','barcode','fv_artsizecode','fn_artsizeid','fn_whconsiid']])
+    
+    kolom_baru25 = (['pk_id','toko','code toko','artikel','size'] + 
+                    [col for col in df_sq25.columns if col not in 
+                    ['pk_id','toko','code toko','artikel', 'size','barcode','fv_artsizecode','fn_artsizeid','fn_sizeid','fn_whconsiid']])
+
+    
+    # df_sq24 = df_sq24[kolom_baru24]
+    df_sq25 = df_sq25[kolom_baru25]
+    del df_artsq, df_cus
+    gc.collect()
+    # df_sq24 = df_sq24.loc[~(df_sq24['artikel'].isnull())]
+    print("Before pivot:")
+    print(df_sq25.info(memory_usage='deep'))
+    print(df_sq25.memory_usage(deep=True).sum() / 1024 / 1024, "MB")
+    df_sq25 = df_sq25.loc[~(df_sq25['artikel'].isnull())]
+    df = proc_pivot_table_n(df_sq25,
+                    values='stock akhir',
+                    col_index=['code toko','artikel'],
+                    columns=['size'],
+                    col_ket=['fv_configname'],col_select=['code toko','artikel','status'])
+    print("After pivot:")
+    print(df.info(memory_usage='deep'))
+    print(df.memory_usage(deep=True).sum() / 1024 / 1024, "MB")
+    df_sq25=pd.merge(df_sq25,df[['code toko','artikel','status']],how='left',on=['code toko','artikel'])
+    del df
+    gc.collect()
+    df_sq25=df_sq25.rename(columns={'fv_configname':'bot/top'})
+    # df_result24=df_sq24.select_dtypes(include='number').sum()
+    
+
+    # df_sq24.to_excel('/opt/share/For MDstock artikel all store 2024.xlsx', index=False)
+    total_rows = len(df_sq25)
+    chunks = 3
+    chunk_size = math.ceil(total_rows / chunks)  # otomatis bagi 3
+
+    with pd.ExcelWriter('/opt/share/For MD/stock artikel all store 2026.xlsx', engine='xlsxwriter') as writer:
+        for i in range(chunks):
+            start_row = i * chunk_size
+            end_row = min(start_row + chunk_size, total_rows)
+            sheet_df = df_sq25.iloc[start_row:end_row]
+            sheet_df.to_excel(writer, index=False, sheet_name=f'data_{i+1}')
+    # df_result25=df_sq25.select_dtypes(include='number').sum()
+    # # df_result24.to_excel('df_result24.xlsx')
+    # df_result25.to_excel('/opt/share/PB DB/df_result25.xlsx')
+
 def md_artikel_size2():
     df_artsq= df__artsizecode(col='fv_artsizecode, fv_barcode, fv_sizename,fv_configname',stat='imp')
     df_sqq24= df__sales_thru_24('*')
@@ -363,7 +580,22 @@ def md_artikel_size2():
     df2r=df2.select_dtypes(include='number').sum()
     df2r.to_excel('/opt/share/For MD/artsize_gd_result.xlsx')
     df2.to_excel('/opt/share/For MD/stock artikel all 2025.xlsx', index=False)
+def sales_qty_value(year):
+    df=df__pb_penjualan_(year)
+    # Pivot keduanya sekaligus
+    df_pivot = df.pivot_table(
+        index=['fn_whconsiid','fv_artsizecode'],
+        columns='fc_monthname',
+        values=['qty','value'],
+        aggfunc='sum',
+        fill_value=0
+    )
 
+    # Flatten multiindex columns -> ubah jadi satu level
+    df_pivot.columns = [f"{month}_{metric}" for metric, month in df_pivot.columns]
+
+    # Reset index biar jadi kolom biasa
+    df_final = df_pivot.reset_index()
 def stock_daily():
     trx_rt()
 def sales_daily(year):
@@ -390,6 +622,13 @@ def sales_daily(year):
     df['fn_sim_amount'] = np.where(df['fc_status'] == "X", df['fn_totalpenjualan'], df['fn_nett_amount'])
     df['fn_dpp'] = df['fn_nett_amount']/1.11
     df['fn_dpp2'] = df['fn_sim_amount']/1.11
+
+    df_art=df_artikel_pb_('fv_artsizecode, fv_catname',distinct=False,where='')
+    df=df.merge(df_art,how='left',on='fv_artsizecode')
+    df=df.rename(columns={'fn_hargasatuan':'fm_amount','fv_status_artikel':'fv_status'})
+    df['fv_ornal'] = df.apply(add_ornal, axis=1)
+    df=df.rename(columns={'fm_amount':'fn_hargasatuan','fv_status':'fv_status_artikel'}).drop(columns='fv_catname')
+    
     table_name = f"pb_penjualan_today"
     save_to_sql(df, table_name, 'imp')
     add_index_and_foreign_keys(
@@ -465,8 +704,84 @@ def count_artikel():
     save_to_sql(df, nama_tabel, 'imp')
     return
 
-def aging_gudang():
-    df=df__aging_gudang()
+def stock_borken_aging():
+    df=df__stock_today_all_store()
+    df_aging = df__aging()
+    df = proc_add_aging(df, df_aging)
+    pivot_table = proc_pivot_table(df)
+    df_cus=df__customers_pb_('fn_whconsiid, concat(fc_code," - ", fv_toko," - ",fv_kota)  Toko',distinct=False,where='')
+    pivot_table=pivot_table.merge(df_cus,how='left',on='fn_whconsiid')
+    pivot_table['tahun_float'] = pivot_table['aging'] / 365
+    pivot_table['Aging Tahun'] = (pivot_table['tahun_float'] * 2).astype(int) / 2
+    list_art=list_to_sql_in(pivot_table,'fv_barcode')
+    list_art=f'and fv_barcode in ({list_art})'
+    df_art=df_artikel_pb_('fn_articleid, fv_barcode',distinct=True,where=f'{list_art}')
+    df_aging_gd=df__aging_pb_('fn_articleid, fn_hari', where='')
+    df_art=df_art.merge(df_aging_gd, how='left', on='fn_articleid').drop(columns='fn_articleid')
+    pivot_table=pivot_table.merge(df_art,how='left',on='fv_barcode')
+    nama_file = f'/opt/share/For Alokator/Data broken aging.xlsx'
+    pivot_table[['Toko','fv_barcode','status','sumQty','aging','Aging Tahun',
+                '27','28','29','30','31','32','33','34','36','38','40','S','M','L','XL','XXL']].rename(columns={
+                    'fv_barcode':'Artikel',
+                    'sumQty':'Jumlah stock',
+                    'fn_hari':'Aging Gudang'
+                }).to_excel(f'{nama_file}',index=False)
+    
+def aging_gudang_pb():
+    query_gr = '''
+        SELECT a.fc_nodoc, fd_arrivaldate, fv_nopo, fn_articleid, fn_qty FROM gis_db1.grdtl_tb a
+        inner join gis_db1.grmst_tb b on a.fc_nodoc = b.fc_nodoc
+        '''
+    with get_engine('read') as engine:  # Menggunakan context manager dengan with
+        df_gr = pd.read_sql(query_gr, engine)
+    # Cari tanggal dengan qty tertinggi per store & product
+    result = df_gr.sort_values('fn_qty', ascending=False).groupby(['fv_nopo', 'fn_articleid']).first().reset_index()
+
+    # Urutkan dari tanggal terbaru
+    df_sorted = result.sort_values('fd_arrivaldate', ascending=False)
+
+    # Ambil baris pertama (arrival terbaru) untuk tiap articleid
+    df_latest = df_sorted.drop_duplicates(subset='fn_articleid', keep='first')
+
+    query_gr = '''
+        SELECT distinct fn_articleid, fv_barcode FROM gis_local.artikel_pb 
+        '''
+    with get_engine('imp') as engine:  # Menggunakan context manager dengan with
+        df_art = pd.read_sql(query_gr, engine)
+
+    # unique_ids = pd.DataFrame(df_art['fn_articleid'].unique(), columns=[['fn_articleid','fv_barcode']])
+    df_latest = pd.merge(df_latest, df_art, on='fn_articleid', how='right')
+
+    df_latest=df_latest.fillna({'fn_qty':0, 'fd_arrivaldate':'2023-01-01', 'fv_nopo':'', 'fc_nodoc':''})
+
+
+    today = pd.Timestamp(datetime.now().date())
+    df_latest["fn_hari"] = (today - df_latest["fd_arrivaldate"]).dt.days
+    df_latest["fn_bulan"] = (today.year - df_latest["fd_arrivaldate"].dt.year) * 12 + (today.month - df_latest["fd_arrivaldate"].dt.month)
+
+    query = '''
+    SELECT distinct fn_articleid, a.fd_dateinput FROM gis_db1.dodtl_tb a
+    left join gis_db1.domst_tb b on a.fc_nodoc=b.fc_nodoc 
+    where a.fc_nodoc like "DO%%"'''
+    with get_engine('read') as engine:  # Menggunakan context manager dengan with
+        df_fdo = pd.read_sql(query, engine)
+    df_unique = (
+        df_fdo
+        .sort_values('fd_dateinput')
+        .drop_duplicates(subset='fn_articleid', keep='first')
+    )
+    # df_latest.to_sql(f'aging_gudang_pb', engine_imp, if_exists='replace', index=False)
+    df_latest = pd.merge(df_latest, df_unique, on='fn_articleid', how='left')
+    df_latest["fn_hari_fdo"] = (today - df_latest["fd_dateinput"]).dt.days
+    df_latest["fn_bulan_fdo"] = (today.year - df_latest["fd_dateinput"].dt.year
+                            ) * 12 + (today.month - df_latest["fd_dateinput"].dt.month)
+    df_latest = df_latest.assign(
+        fd_dateinput = df_latest['fd_dateinput'].combine_first(df_latest['fd_arrivaldate']),
+        fn_hari_fdo  = df_latest['fn_hari_fdo'].combine_first(df_latest['fn_hari']),
+        fn_bulan_fdo = df_latest['fn_bulan_fdo'].combine_first(df_latest['fn_bulan'])
+    )
+    nama_tabel='aging_gudang_pb'
+    save_to_sql(df_latest, nama_tabel, 'imp')
     return
 
 def disc2nd_consi_online():
@@ -492,12 +807,13 @@ def disc2nd_consi_online():
     return  
 
 def mini_consigment_sales(year):
-    df=df__sales_(year,'fn_whconsiid,fv_artsizecode,fv_event, fd_tgltrx,fn_jualpersize,fn_totalpenjualan,fn_nett_amount')
-    df_artpb=df__artikel_pb('fv_artsizecode,fv_barcode,fv_catname,fv_fitname,fv_brandname,fv_divname,fv_sizename,fm_price,fv_ornal,fv_status')
-    df_cuspb=df__customers_pb('fv_toko,fc_code,fn_whconsiid')
+    df=df__sales_(year,'fn_whconsiid,fv_artsizecode,fv_event, fd_tgltrx,fn_jualpersize,fn_totalpenjualan,fn_nett_amount,fv_nopenjualan')
+    df_artpb=df__artikel_pb('fv_artsizecode,fv_barcode,fv_catname,fv_fitname,fv_brandname,fv_divname,fv_sizename,fm_price,fv_ornal,fv_status,fv_colorname,fv_fitting,motif')
+    df_cuspb=df__customers_pb('fv_toko,fc_code,fn_whconsiid,fc_detail_tok Group_toko')
     df=pd.merge(df, df_artpb, on='fv_artsizecode', how='left')
     df=pd.merge(df, df_cuspb, on='fn_whconsiid', how='left')
-    df=df[['fd_tgltrx','fc_code','fv_toko','fv_barcode','fv_catname','fv_fitname','fv_brandname',
+    print(df.info())
+    df=df[['fd_tgltrx','fc_code','fv_toko','Group_toko','fv_barcode','fv_catname','fv_colorname','fv_fitting','motif','fv_brandname','fv_nopenjualan',
     'fv_divname','fv_sizename','fv_event','fm_price','fv_ornal','fv_status','fn_totalpenjualan','fn_nett_amount','fn_jualpersize']]
     df=rename_col_sql_to_xlsx_gis(df)
     output_folder = f'/opt/share/For Alokator/Sales cosiment/{year}'
@@ -506,16 +822,98 @@ def mini_consigment_sales(year):
     df['bulan_num'] = df['Sales Date'].dt.strftime('%m')
     df['bulan'] = df['Sales Date'].dt.strftime('%b')  # Nama bulan 3 huruf
     df['tahun'] = df['Sales Date'].dt.strftime('%y')  # Tahun dua digit
+    df_tglimput=df__tgl_input_penju(year)
+    print(df.info(),df_tglimput.info())
+    df=df.merge(df_tglimput, how='left',on='fv_nopenjualan').drop(columns='fv_nopenjualan')
 
     # Simpan ke Excel per bulan
     for (bulan_num, bulan, tahun), group in df.groupby(['bulan_num', 'bulan', 'tahun']):
         nama_file = f"{output_folder}/Sale Consi {bulan_num} {bulan} {tahun}.xlsx"
         group.drop(columns=['bulan', 'tahun', 'bulan_num']).to_excel(nama_file, index=False)
         print(f"✅ File disimpan: {nama_file}") 
+def ost_ob():
+    df_cus=df__customers_pb_('fn_cusid,fc_code "Code Toko",fv_toko Toko',distinct=False,where='')
+    df_art=df_artikel_pb_('fv_artsizecode, fv_barcode "Artikel", fv_sizename "Size"' ,distinct=False,where='')
+    df_user = df__user('fn_userid,fv_username "User"',)
+    df_ostob_=df__otsob()
+    df_ostob_=df_art.merge(df_ostob_,how='right',on='fv_artsizecode').drop(columns='fv_artsizecode')
+    df_ostob_=df_cus.merge(df_ostob_,how='right',on='fn_cusid').drop(columns='fn_cusid')
+    df_ostob_=df_ostob_.merge(df_user,how='left',on='fn_userid').drop(columns='fn_userid')
+    nama_file = fr"/opt/share/For Alokator/Out Standing OB.xlsx"
+    df_ostob_.to_excel(f'{nama_file}',index=False)
+    return
+
+def ost_do():
+    df_cus=df__customers_pb_('fn_cusid,fc_code "Code Toko",fv_toko Toko',distinct=False,where='')
+    df_art=df_artikel_pb_('fv_artsizecode, fv_barcode "Artikel", fv_sizename "Size"' ,distinct=False,where='')
+    df_user = df__user('fn_userid,fv_username "User"',)
+    input_value = (date.today().replace(day=1) - relativedelta(months=1)).strftime("%Y-%m-%d")
+    df_ostdo_=df__otsdo_rt(input_value).drop(columns='fc_status')
+    df_ostdo_=df_art.merge(df_ostdo_,how='right',on='fv_artsizecode').drop(columns='fv_artsizecode')
+    df_ostdo_=df_cus.merge(df_ostdo_,how='right',on='fn_cusid').drop(columns='fn_cusid')
+    df_ostdo_=df_ostdo_.merge(df_user,how='left',on='fn_userid').drop(columns='fn_userid')
+    nama_file = fr"/opt/share/For Alokator/Out Standing DO.xlsx"
+    df_ostdo_.to_excel(f'{nama_file}',index=False)
+    return
+
+def master_gudang():
+    df=df__stock_wh()
+    df_artsize= df_artikel_pb_('fv_barcode,fn_articleid,fv_artsizecode,fv_sizename,fv_configname')
+    df=df.merge(df_artsize,how='left',on='fv_artsizecode')
+    df_piv=pd.pivot_table(df,
+            values='fn_qty',
+            index=['fv_barcode','fv_whtypename'],
+            columns='fv_sizename',
+            aggfunc='sum',
+            fill_value=0).reset_index()
+    df_art= df_artikel_pb_('distinct fv_barcode,fv_catname,fv_brandname,fv_divname,fv_colorname,fv_rating,' \
+        'fv_configname,fv_namemark,fm_price,fm_amount,fv_fitting,fv_status, fv_ornal, motif')
+    df_aging=df__aging_gudang_pb()
+    df_aging=df_aging.merge(df_artsize[['fv_barcode','fn_articleid']].drop_duplicates(),on='fn_articleid',how='left')
+    df_broken=proc_pivot_table_n(df.loc[df['fv_whtypename'].isin(['PUSAT','RETUR','KONSINETTO'])],
+                values='fn_qty',
+                col_index=['fv_barcode'],
+                columns=['fv_sizename'],
+                col_ket=['fv_configname'])
+    df_piv3=df_piv.merge(df_art,how='left',on='fv_barcode')
+    df_piv3=df_piv3.merge(df_aging[['fv_barcode','fn_hari']],how='left',on='fv_barcode')
+    df_piv3=df_piv3.merge(df_broken[['fv_barcode','status','sumQty']],how='left',on='fv_barcode')
+    all_sizes_bottom = ['25', '26', '27', '28', '29', '30', '31', '32', '33', '34', '35', '36', '37', '38',
+                        '39', '40', '42', '44', 'ALLSIZE']
+    all_sizes_top = ['FS', 'XS',  'S', 'M', 'L', 'XL', 'XXL', 'XXXL']
+    all_sizes = all_sizes_bottom + all_sizes_top
+    df_piv3=df_piv3[['fv_barcode','fv_whtypename','fv_catname','fv_brandname','fv_divname','fv_colorname','fv_namemark',
+                    'fv_fitting','fv_status','fv_ornal','motif','fv_configname','fv_rating','fn_hari','status','fm_price','fm_amount',*all_sizes,'sumQty']
+                    ].rename(columns={
+                        'fv_barcode':'Artikel',
+                        'fv_whtypename':'Gudang',
+                        'fv_brandname':'Brand',
+                        'fv_divname':'Divisi',
+                        'fv_colorname':'Color',
+                        'fv_namemark':'Acara',
+                        'fv_fitting':'Fitting',
+                        'fv_status':'Status Produksi',
+                        'fv_ornal':'Status',
+                        'motif':'Motif',
+                        'fn_hari':'Aging gundang',
+                        'status':'Status barang',
+                        'fm_price':'Harga Gross',
+                        'fm_amount':'Harga Nett',
+                        'sumQty':'Jumlah',
+                        'fv_configname':'Top/Bottom',
+                        'fv_rating':'Rating',
+                    })
+    nama_file = fr"/opt/share/For Alokator/Data Master Gudang.xlsx"
+    df_piv3.to_excel(f'{nama_file}',index=False)
+    return
+def upsert_master(): 
+    df2=df__artikel_pb("*")
+    df2.to_excel('/opt/share/For Alokator/MASTER ARTIKEL.xlsx', index=False)
 
 def upsert_artikel_pb():
     df= df__artikel_pb_read()
-    df['fv_artsizecode'] = df['fv_artsizecode'].str.replace(" ", "", regex=False)
+    # df['fv_artsizecode'] = df['fv_artsizecode'].str.replace(" ", "", regex=False)
+    # df['fv_barcode'] = df['fv_barcode'].str.replace(" ", "", regex=False)
     df = df.drop_duplicates(subset=['fv_artsizecode'])
     df_nfa= get_artikel_md()
     df=pd.merge(df,df_nfa,on='fv_barcode',how='left')
@@ -525,7 +923,7 @@ def upsert_artikel_pb():
     df[['fv_rating','fv_neo_link_foto']]=df[['fv_rating','fv_neo_link_foto']].fillna('none')
     df2[['fv_rating','fv_neo_link_foto']]=df2[['fv_rating','fv_neo_link_foto']].fillna('none')
     df['fv_ornal'] = df.apply(add_ornal, axis=1)
-    df3=get_new_or_changed_rows(df, df2,subset=colist)
+    df3=df
     if df3.empty: return print("✅ Tidak Data yang diupsert!")
     df3=df3.fillna('none')
     df_art_status=df__artikel_status()
@@ -551,7 +949,8 @@ def upsert_artikel_pb():
     'fv_neo_link_foto',
     'fv_fitting',
     'fv_status',
-    'fv_ornal']]
+    'fv_ornal',
+    'fc_hold']]
     df3['fm_amount'] = pd.to_numeric(df3['fm_amount'], errors='coerce') 
     df3['fm_amount'] = df3['fm_amount'].fillna(0)
     df3['fm_price'] = pd.to_numeric(df3['fm_price'], errors='coerce')  # jadi NaN kalau gak valid
@@ -571,6 +970,18 @@ def upsert_customers_pb():
     mic_path = f'{base_path}PIC MIC.xlsx'
     table_name = 'customers_pb'
     df = df__customers_pb_read()
+    # df["fn_whconsiid"] = df["fn_whconsiid"].fillna(0).astype("int64")
+
+    # mask = df["fn_whconsiid"] == 0
+
+    # start = df.loc[~mask, "fn_whconsiid"].max()
+    # if pd.isna(start):
+    #     start = 0
+
+    # df.loc[mask, "fn_whconsiid"] = range(
+    #     start + 1,
+    #     start + 1 + mask.sum()
+    # )
     df_excel = pd.read_excel(excel_path)
     emp_tb=pd.read_csv(csv_path)
     emp_tb['fn_userid']=emp_tb['fn_userid'].astype(int)
@@ -588,13 +999,14 @@ def upsert_customers_pb():
     df['SUPERVISOR']=df['SUPERVISOR/ OJT**']
 
     df_picmic=pd.read_excel(mic_path,).dropna(how='all')
-    df=pd.merge(df,df_picmic[['PIC MIC','STORE GIS']],left_on='code',right_on='STORE GIS',how='left').fillna('-')
+    df=pd.merge(df,df_picmic[['PIC MIC','STORE GIS','SPG Konsinetto']],left_on='code',right_on='STORE GIS',how='left').fillna('-')
     df['Alokator']=df['PIC MIC']
     df.loc[df['fn_cusid']==915,'fn_whconsiid']= 9000
     df=df.drop(columns=['KODE TOKO GIS', 'MANAGER_x', 'SUPERVISOR/ OJT**','STORE GIS','PIC MIC'])
     df.loc[df['fn_grpcusid']==9,'Neo Toko']= "Bazar"
     df.loc[df['Toko'].str.startswith('RJ-FO'),'fc_codecus']=df['code']
     df.loc[df['fc_codecus'].str.startswith('-'),'fc_codecus']=df['code']
+    df=df.rename(columns={'SPG Konsinetto':'fv_spg_kosninetto'})
     if df is None or df.empty:
             print("❌ DataFrame kosong! Upsert dibatalkan.")
     else:

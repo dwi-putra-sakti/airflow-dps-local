@@ -115,6 +115,9 @@ def rename_col_sql_to_xlsx_gis(df):
         'fn_jualpersize':'Qty',
         'fv_ornal': 'Ornal',
         'fv_status':'Status Produksi',
+        'fv_colorname':'Color',
+        'fv_fitting':'Fitting',
+        'motif':'Motif'
 
     }
     # Lakukan rename dan sort
@@ -136,7 +139,12 @@ def define_sql_types(df):
     """Menentukan tipe data untuk SQL sesuai dengan tipe kolom."""
     sql_types = {}
     for col in df.columns:
-        col_dtype = df[col].dtype
+        col_data = df[col]
+        if isinstance(col_data, pd.DataFrame):
+            print(f"⚠️ Kolom {col} duplikat, ambil kolom pertama")
+            col_data = col_data.iloc[:, 0]
+
+        col_dtype = col_data.dtype
 
         # Jika kolom tipe float
         if col_dtype == 'float64':
@@ -395,7 +403,11 @@ def merge_and_calculate(sales_data, stock_data, start_year, end_year):
     # combined_data=combined_data.drop(columns='tgltrx')
     # Generate nama kolom stok dan qty berdasarkan tahun
     periods = generate_months_for_year(start_year, end_year)  # Gunakan function yang baru dibuat
-    months = list(periods.keys())  # Ambil nama bulan dari dict
+    months = sorted(
+            periods.keys(),
+            key=lambda x: datetime.strptime(x, '%b_%y')
+        )
+
 
     # Hitung total stok per bulan
     for i, month in enumerate(months):
@@ -407,14 +419,26 @@ def merge_and_calculate(sales_data, stock_data, start_year, end_year):
     qty_cols = [f'qty_{m}' for m in months]
     stock_cols= [f'stock {m}' for m in months]
     # Cari kolom stok yang ada dalam data
+    for col in stock_cols:
+        if col not in combined_data.columns:
+            combined_data[col] = 0
     available_stock_cols = [col for col in stock_data.columns if col.startswith('stock ')]
 
     # Pilih kolom stok terakhir (sesuai urutan bulan)
     if available_stock_cols:
-        last_stock_col = (available_stock_cols)[-1]  # Ambil stok terakhir berdasarkan nama kolom
+        def extract_month(col):
+            return datetime.strptime(col.replace('stock ', ''), '%b_%y')
+
+        last_stock_col = max(
+            available_stock_cols,
+            key=extract_month
+        )
     else:
         last_stock_col = None  # Jika tidak ada stok, gunakan None
-        
+    # Pastikan semua kolom qty ada (isi 0 jika belum ada)
+    for col in qty_cols:
+        if col not in combined_data.columns:
+            combined_data[col] = 0
     combined_data['total_qty'] = combined_data[qty_cols].sum(axis=1)
     # Perhitungan total_stock
     if last_stock_col:
@@ -440,6 +464,7 @@ def merge_and_calculate(sales_data, stock_data, start_year, end_year):
     combined_data = combined_data[(combined_data['min'] != 0) | (combined_data['max'] != 0)]
     return combined_data
 
+
 def merge_detail(final_data, stock_data, start_year, end_year):
     df_articlesize = df__artsizecode()
     df_size = df__size()
@@ -454,7 +479,7 @@ def merge_detail(final_data, stock_data, start_year, end_year):
     month_names = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 
     current_year = datetime.now().year
-    current_month = datetime.now().month +1
+    current_month = min(datetime.now().month + 1, 12)
     # last_stock_col = None  # Variabel untuk menyimpan kolom stock terakhir
 
     for year in range(start_year, end_year + 1):
@@ -468,7 +493,7 @@ def merge_detail(final_data, stock_data, start_year, end_year):
 
             # Hanya menyimpan stock bulan terakhir
             if month == last_month:
-                last_stock_col = stock_col
+                lasast_stock_col = stock_col
                 columns.append(stock_col)
                 rename_columns[stock_col] = 'fn_stock_at'
             else:
@@ -511,7 +536,26 @@ def merge_detail(final_data, stock_data, start_year, end_year):
     })
     final_data = final_data[columns]
     final_data = final_data.rename(columns=rename_columns).sort_values(by='fn_whconsiid')
+    final_data = final_data.loc[:, ~final_data.columns.duplicated()]
+    if month == 12:
+        final_data['fn_ts_12']=final_data['fn_ts_12']+final_data['fn_stock_at']
     return final_data
+
+def ensure_stock_columns(df, base_col='fn_stock', fallback_col='fn_stock_at', start=1, end=12):
+    """
+    Memastikan kolom fn_stock_01 s.d fn_stock_12 tersedia.
+    Jika tidak ada, kolom akan dibuat dan diisi dari fallback_col.
+    """
+
+    if fallback_col not in df.columns:
+        raise ValueError(f"Kolom fallback '{fallback_col}' tidak ditemukan di DataFrame")
+
+    for i in range(start, end + 1):
+        col_name = f"{base_col}_{i:02d}"
+        if col_name not in df.columns:
+            df[col_name] = df[fallback_col]
+
+    return df
 
 def generate_rename_dict(start_year, end_year, df):
     # Buat dictionary untuk bulan
@@ -551,6 +595,8 @@ def save_large_excel(df, path, sheet_prefix, chunk_size=50000):
 
 def trx_rt():
     df_trxstx= df__rtt()
+    df_trxstx.loc[df_trxstx['tgltrx'] == '10-30-0025', 'tgltrx'] = '10-30-2025'
+
     df_trxstx['tgltrx'] = pd.to_datetime(df_trxstx['tgltrx'], format='%m-%d-%Y')
     df_trxstx['fn_whconsiid']=df_trxstx['fn_whconsiid'].astype(int)
     df_trxstx['stock']=df_trxstx['stock'].astype(int)
@@ -668,7 +714,7 @@ def process_data_cus(df):
     df['fc_codecus'] = df['fc_codecus'].fillna(df['fc_code'])
     # Tambahkan kondisi untuk `fv_configname`
     conditions = [18, 27, 74, 117, 134, 137, 151, 116]
-    df.loc[df['fn_whconsiid'].isin(conditions), 'fv_configname'] = "7 Toko Strategis"
+    df.loc[df['fn_whconsiid'].isin(conditions), 'fv_configname'] = "Toko Strategis"
     df['fv_manager']=df['fv_manager'].replace({
         'HERU SULISTYO':'HERU S.',
         'HERU SULISTYO & JASON LEE':'HERU S. & JASON L.',
@@ -740,6 +786,36 @@ def upsert_data(engine, table_name, df, primary_key="fn_whconsiid"):
     finally:
         session.close()
 
+def delete_rows(engine, table_name, df_filtered, primary_key="fn_whconsiid"):
+    if df_filtered is None or df_filtered.empty:
+        print("⚠️ Tidak ada data yang perlu dihapus.")
+        return
+
+    with get_engine(engine) as engine:
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        try:
+            metadata = MetaData()
+            metadata.reflect(bind=engine)
+            table = metadata.tables[table_name]
+
+            # Ambil list primary key dari df_filtered
+            keys_to_delete = df_filtered[primary_key].tolist()
+
+            delete_stmt = table.delete().where(
+                table.c[primary_key].in_(keys_to_delete)
+            )
+
+            session.execute(delete_stmt)
+            session.commit()
+
+            print(f"🗑️ Berhasil menghapus {len(keys_to_delete)} baris.")
+        except Exception as e:
+            session.rollback()
+            print("❌ Error delete:", e)
+        finally:
+            session.close()
+
 def add_ornal(row):
     acara = row.get('fv_status', '')  # diasumsikan ini sama dengan Artikel[acara]
     kategori = row.get('fv_catname', '')
@@ -757,10 +833,12 @@ def add_ornal(row):
         "SHORT SLEEVE KOKO SHIRT": 229000,
         "SHORT SLEEVE POLO SHIRT": 189000,
         "SHORT SLEEVE HENLEY SHIRT": 189000,
+        'SHORT SLEEVE UTILITIES SHIRT':189000,
         "SHORT SLEEVE T-SHIRT (CREW NECK)": 139000,
         "LONG SLEEVE T-SHIRT (CREW NECK)": 192000,
         "TRUCKER JACKET PIECE DYED": 300000,
         "TRUCKER JACKET DENIM":300000,
+        'VARSITY JACKET':300000,
         "HERINGTON JACKET": 300000,
         "BOMBER JACKET": 300000,
         "UTILITIES JACKET": 300000,
@@ -827,7 +905,7 @@ def proc_pivot_table_n(df,
     pivot_table['status'] = np.where(
         (pivot_table["fv_configname"] == "TOP") & (pivot_table[top_columns].gt(0).sum(axis=1) < 3), "BROKEN",
         np.where(
-            (pivot_table["fv_configname"] == "BOTTOM") & (pivot_table[bottom_columns].gt(0).sum(axis=1) < 5), "BROKEN",
+            (pivot_table["fv_configname"] == "BOTTOM") & (pivot_table[bottom_columns].gt(0).sum(axis=1) < 7), "BROKEN",
             "SEHAT"
         )
     )
@@ -839,13 +917,8 @@ def proc_pivot_table_n(df,
         return pivot_table
     else : return pivot_table[col_select]
 
-def proc_add_aging(df):
-    
-    df_aging = df__aging()
-    df_cus=df__customers_pb('fn_whconsiid,fc_code "code toko"')
-    # results = DatabaseConnector.execute_raw_sql(query, using=dbLoad)
-    # df = pd.DataFrame(results)
-###     Proses untuk menambahkan kolom '1st DO', 'last_receive', dan 'stock_on_1st_do' ke DataFrame df.
+def proc_add_aging(df,df_aging):
+### Proses untuk menambahkan kolom '1st DO', 'last_receive', dan 'stock_on_1st_do' ke DataFrame df.
     if not df_aging.empty:
         # Group df_aging by fn_whconsiid and fv_barcode, and get the minimum fd_tgltrx
         aging_min_date = df_aging.groupby(['fn_whconsiid', 'fv_barcode'])['fd_tgltrx'].min().reset_index()
@@ -854,7 +927,7 @@ def proc_add_aging(df):
         # Group df_aging by fn_whconsiid and fv_barcode, and get the maximum fd_tgltrx (last_receive)
         aging_max_date = df_aging.groupby(['fn_whconsiid', 'fv_barcode'])['fd_tgltrx'].max().reset_index()
         aging_max_date.rename(columns={'fd_tgltrx': 'last_receive'}, inplace=True)
-        df= pd.merge(df, df_cus, on='code toko', how='left')
+
         # Merge df with aging_min_date on fn_whconsiid and fv_barcode
         df = pd.merge(df, aging_min_date, on=['fn_whconsiid', 'fv_barcode'], how='left')
         df = pd.merge(df, aging_max_date, on=['fn_whconsiid', 'fv_barcode'], how='left')
@@ -875,7 +948,7 @@ def proc_add_aging(df):
         # Select only the required columns
         aging_stock_on_1st_do = aging_stock_on_1st_do[['fn_whconsiid', 'fv_barcode', 'fn_stock']]
         # aging_stock_on_1st_do.rename(columns={'fn_stock': 'stock_on_1st_do'}, inplace=True)
-        df=df.rename(columns={'artikel':'fv_barcode'})
+
         # Merge df with aging_stock_on_1st_do to add stock_on_1st_do column
         df = pd.merge(df, aging_stock_on_1st_do, on=['fn_whconsiid', 'fv_barcode'], how='left')
         df_sum = df.groupby(['fn_whconsiid', 'fv_barcode'], as_index=False)['fn_stock'].sum().drop_duplicates(subset=['fv_barcode'])
@@ -892,13 +965,167 @@ def proc_add_aging(df):
         # Format '1st DO' to 'YYYY-MM-DD'
         df['1st DO'] = df['1st DO'].dt.strftime('%Y-%m-%d')
         df['last_receive'] = df['last_receive'].dt.strftime('%Y-%m-%d')
-
-        df=df.rename(columns={'fv_barcode':'artikel'})
         return df
     else:
         # Jika aging_df kosong, buat kolom dengan nilai default
         df['1st DO'] = '2024-01-01'
         df['last_receive'] = '2024-01-01'
-        df['aging'] = 0
+        df['aging'] = '2024-01'
         df['stock_on_1st_do'] = 0
         return df
+def proc_pivot_table(df):
+    all_sizes_bottom = ['25', '26', '27', '28', '29', '30', '31', '32', '33', '34', '35', '36', '37', '38',
+                        '39', '40', '42', '44', 'ALLSIZE']
+    all_sizes_top = ['FS', 'XS', 'SS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL']
+    all_sizes = all_sizes_bottom + all_sizes_top
+
+    # Buat pivot table
+    pivot_table = pd.pivot_table(
+        df,
+        values='stocks',
+        index=['fv_barcode', 'fn_whconsiid'],
+        columns=['fv_sizename'],
+        aggfunc='sum',
+        fill_value=0
+    )
+
+    # Reset index agar bisa merge
+    pivot_table = pivot_table.reset_index()
+
+    # Kolom detail yang ingin ditambahkan kembali
+    kolom_detail = ['fv_barcode', '1st DO', 'last_receive', 'aging','fv_configname',
+                    'stock_on_1st_do', 'fn_whconsiid']
+    # Merge detail
+    pivot_table = pd.merge(pivot_table, df[kolom_detail], on=['fv_barcode', 'fn_whconsiid'], how='left')
+    pivot_table = pivot_table.drop_duplicates()
+
+    # Urutkan kolom agar kolom ukuran di akhir
+    urutan_kolom = kolom_detail + [col for col in pivot_table.columns if col not in kolom_detail]
+    pivot_table = pivot_table[urutan_kolom]
+
+    # Pastikan semua ukuran muncul
+    for size in all_sizes:
+        if size not in pivot_table.columns:
+            pivot_table[size] = 0
+        pivot_table[size] = pd.to_numeric(pivot_table[size], errors='coerce').fillna(0).astype(int)
+
+    # Atur ulang urutan: non-size columns dulu, lalu size columns
+    size_columns = [size for size in all_sizes if size in pivot_table.columns]
+    other_columns = [col for col in pivot_table.columns if col not in size_columns]
+    pivot_table = pivot_table[other_columns + size_columns]
+
+    # Hitung status (BROKEN / SEHAT)
+    top_columns = ["L", "M", "S", "XL", "XS", "XXL", "XXXL"]
+    bottom_columns = ['25', '26', '27', '28', '29', '30', '31', '32', '33', '34',
+                        '35', '36', '37', '38', '39', '40', '42', '44']
+
+    pivot_table['status'] = np.where(
+        (pivot_table["fv_configname"] == "TOP") & (pivot_table[top_columns].gt(0).sum(axis=1) < 3), "BROKEN",
+        np.where(
+            (pivot_table["fv_configname"] == "BOTTOM") & (pivot_table[bottom_columns].gt(0).sum(axis=1) < 5), "BROKEN",
+            "SEHAT"
+        )
+    )
+
+    # Hitung total jumlah qty size (sumQty)
+    pivot_table['sumQty'] = pivot_table[size_columns].sum(axis=1)
+    pivot_table=pivot_table.drop(columns=['fv_configname'])
+
+    return pivot_table
+    
+MONTH_MAP = {
+    'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4,
+    'may': 5, 'jun': 6, 'jul': 7, 'aug': 8,
+    'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+}
+
+import re
+
+def parse_year_month(file_path):
+    match = re.search(r'pb_stock_(\w+)_(\d{2})\.xlsx', file_path.lower())
+    if not match:
+        return None, None
+
+    month_str, year_short = match.groups()
+    year = int('20' + year_short)
+    month = MONTH_MAP[month_str]
+
+    return year, month
+def generate_stock_files_parquet(base_path, start_year, end_year, months=None):
+    """
+    months: None | int | list[int]
+    """
+    stock_files = []
+
+    MONTH_LIST = ['jan', 'feb', 'mar', 'apr', 'may', 'jun',
+                  'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+
+    # normalisasi months
+    if months is None:
+        month_indices = range(1, 13)
+    elif isinstance(months, int):
+        month_indices = [months]
+    else:
+        month_indices = months
+
+    for year in range(start_year, end_year + 1):
+        for m in month_indices:
+            month_str = MONTH_LIST[m - 1]
+            file_path = os.path.join(
+                base_path,
+                f'pb_stock_{month_str}_{str(year)[-2:]}.xlsx'
+            )
+            stock_files.append(file_path)
+
+    return stock_files
+def get_stock_data_parquet(parquet_base, start_year, end_year, months=None):
+    """
+    months: None | int | list[int]
+    """
+    all_data = []
+
+    # normalisasi bulan
+    if months is None:
+        month_list = range(1, 13)
+    elif isinstance(months, int):
+        month_list = [months]
+    else:
+        month_list = months
+
+    for year in range(start_year, end_year + 1):
+        for month in month_list:
+            parquet_path = os.path.join(
+                parquet_base,
+                f"tahun={year}",
+                f"bulan={str(month).zfill(2)}",
+                "stock.parquet"
+            )
+
+            if os.path.exists(parquet_path):
+                print(f"✅ Membaca parquet: {parquet_path}")
+                df = pd.read_parquet(parquet_path)
+                all_data.append(df)
+            else:
+                print(f"❌ Parquet tidak ditemukan: {parquet_path}")
+
+    if not all_data:
+        print("⚠️ Tidak ada data parquet yang terbaca.")
+        return pd.DataFrame()
+
+    combined_data = pd.concat(all_data, ignore_index=True)
+    print("Sebelum groupby:", combined_data.shape)
+
+    # pastikan kolom ada
+    required_cols = {'fn_whconsiid', 'fv_artsizecode'}
+    if required_cols.issubset(combined_data.columns):
+        # num_cols = combined_data.select_dtypes(include='number').columns
+        combined_data = (
+            combined_data
+            .groupby(['fn_whconsiid', 'fv_artsizecode'], as_index=False)
+            .sum()
+        )
+        print("Setelah groupby:", combined_data.shape)
+    else:
+        print("⚠️ Kolom wajib tidak lengkap:", required_cols)
+
+    return combined_data

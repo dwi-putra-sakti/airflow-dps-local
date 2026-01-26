@@ -2,7 +2,24 @@ from modules.db_connection import get_engine, get_db
 from datetime import datetime, date
 import pandas as pd
 import numpy as np
+def list_to_sql_in(df, col_name, astype='str'):
+    """
+    Mengubah kolom DataFrame menjadi string SQL untuk WHERE IN.
+    Contoh hasil: "'A', 'B', 'C'"
+    """
+    if col_name not in df.columns:
+        raise ValueError(f"Kolom '{col_name}' tidak ditemukan di DataFrame.")
 
+    # Ambil kolom dan drop NaN
+    values = df[col_name].dropna().astype(astype).tolist()
+
+    # Jika kosong, return string kosong (hindari error di SQL)
+    if not values:
+        return "''"
+
+    # Format jadi "'A', 'B', 'C'"
+    sql_str = ", ".join([f"'{v}'" for v in values])
+    return sql_str
 def max_time_input(col_tgl_input,stat,table):
     db=get_db(stat)
     query = f'''
@@ -26,7 +43,11 @@ def df__aging():
     (SELECT * FROM gis_local.trxstx_pb24 
     where fv_stat like 'receive%%' and fd_tgltrx <= '{input_value}'
     union all
-    SELECT * FROM gis_local.trxstx_pb25 
+    SELECT fn_whconsiid,  
+    fv_artsizecode,  
+    fn_stock ,
+    fd_tgltrx  ,
+    fv_stat FROM gis_local.trxstx_pb25 
     where fv_stat like 'receive%%' and fd_tgltrx <= '{input_value}') a
     left join artikel_pb b on a.fv_artsizecode = b.fv_artsizecode
     WHERE 1=1 
@@ -47,13 +68,13 @@ def df__artikel_pb_read():
     select 
     fv_barcode , fv_artsizecode , fv_catname , fv_brandname , fv_divname , 
     fv_sizename , fm_price , fm_amount , fv_namemark , fv_colorname , 
-    fv_fitname , fv_tomname , fv_configname , motif, fv_picture, fv_rating, fm_cogs, fn_articleid, fv_fitting
-
+    fv_fitname , fv_tomname , fv_configname , motif, fv_picture, fv_rating, fm_cogs, fn_articleid, fv_fitting,
+    fc_hold
     from (
     select a.fn_articleid, c.fv_brandname, e.fv_divname, d.fv_colorname, g.fv_sizename, k.fv_tomname, 
     b.fv_artsizecode, a.fv_barcode, h. fv_catname, f.fv_namemark, a.fm_price, f.fm_amount, i.fv_configname, 
     l.motif, a.fv_picture, m.fv_configname fv_rating, a.fm_cogs,
-    concat(h. fv_catname,' ',j.fv_fitname) as fv_fitname, b.fn_artsizeid, j.fv_fitname fv_fitting
+    concat(h. fv_catname,' ',j.fv_fitname) as fv_fitname, b.fn_artsizeid, j.fv_fitname fv_fitting, a.fc_hold
     
     from (select * from article_tb) a
     left outer join articlesize_tb b on a.fn_articleid=b.fn_articleid
@@ -73,6 +94,41 @@ def df__artikel_pb_read():
     with get_engine('read') as engine:  # Menggunakan context manager dengan with
         df = pd.read_sql(query, engine)
     return df
+
+def df_artikel_pb_(colom,distinct=False,where=''):
+    if distinct==False:distinct=''
+    else :distinct='distinct'
+
+    if where=='': where=''
+    else: where=f'{where}'
+
+    query = f'''
+        SELECT {distinct} {colom}
+        FROM gis_local.artikel_pb
+        where 1=1 {where}
+        '''
+    # df = pd.read_sql(query, engine_imp)
+    with get_engine('imp') as engine:  # Menggunakan context manager dengan with
+        df = pd.read_sql(query, engine)
+    return df
+
+def df__customers_pb_(colom,distinct=False,where=''):
+    if distinct==False:distinct=''
+    else :distinct='distinct'
+
+    if where=='': where=''
+    else: where=f'{where}'
+
+    query = f'''
+        SELECT {distinct} {colom}
+        FROM gis_local.customers_pb
+        where 1=1 {where}
+        '''
+    # df = pd.read_sql(query, engine_imp)
+    with get_engine('imp') as engine:  # Menggunakan context manager dengan with
+        df = pd.read_sql(query, engine)
+    return df
+
 def df__customers_pb(tabel):
     query = f'''
         SELECT {tabel} FROM gis_local.customers_pb
@@ -92,16 +148,63 @@ def df__customers_pb_read():
         LEFT JOIN groupcustomer_tb e ON f.fn_grpcusid = e.fn_grpcusid
         LEFT JOIN config_tb h ON f.fn_typestoreid = h.fn_configid
         '''
-    with get_engine('read') as engine:  # Menggunakan context manager dengan with
+    
+    print(query)
+    with get_engine('write') as engine:  # Menggunakan context manager dengan with
         df = pd.read_sql(query, engine)
     return df
 
+def df__customers_pb_read_(colom,distinct=False,where=''):
+    if distinct==False:distinct=''
+    else :distinct='distinct'
+    query = f'''
+        SELECT {distinct} {colom}
+        FROM warehouseconsi_tb a
+        RIGHT JOIN customer_tb f ON a.fn_cusid = f.fn_cusid
+        LEFT JOIN province_tb c ON f.fn_provinceid = c.fn_provinceid
+        LEFT JOIN city_tb d ON f.fn_cityid = d.fn_cityid
+        LEFT JOIN groupcustomer_tb e ON f.fn_grpcusid = e.fn_grpcusid
+        LEFT JOIN config_tb h ON f.fn_typestoreid = h.fn_configid 
+        where 1=1 {where}
+        '''
+    print(query)
+    with get_engine('write') as engine:  # Menggunakan context manager dengan with
+        df = pd.read_sql(query, engine)
+    return df
+def df__aging_pb_(colom,distinct=False,where=''):
+    if distinct==False:distinct=''
+    else :distinct='distinct'
+    query_gr = f'''
+    SELECT {distinct} {colom} 
+    FROM gis_local.aging_gudang_pb 
+    where 1=1 {where}
+    '''
+    with get_engine('imp') as engine:  # Menggunakan context manager dengan with
+        df = pd.read_sql(query_gr, engine)
+    return df
 def df__markdown():
     query = f'''
         SELECT a.fn_whconsiid, f.fc_hold, f.fv_namecus AS Toko, f.fn_grpcusid,
             c.fv_provincename AS Provinsi, d.fv_cityname AS Kota, f.fn_cusid, f.fc_codecus AS code,
             e.fc_consinetto, e.fv_namegrpcus, h.fv_configname
         FROM warehouseconsi_tb a'''
+def df__user(colom,distinct=False,where=''):
+    if distinct==False:distinct=''
+    else :distinct='distinct'
+
+    if where=='': where=''
+    else: where=f'{where}'
+
+    query = f'''
+        SELECT {distinct} {colom}
+        FROM gis_db.user_tb
+        where 1=1 {where}
+        '''
+    # df = pd.read_sql(query, engine_imp)
+    with get_engine('write') as engine:  # Menggunakan context manager dengan with
+        df = pd.read_sql(query, engine)
+    return df
+
 def df__cus_user():
     query = f'''
         SELECT a.fn_userid, fn_cusid FROM 
@@ -112,6 +215,17 @@ def df__cus_user():
     with get_engine('read') as engine:  # Menggunakan context manager dengan with
         df = pd.read_sql(query, engine)
     return df
+
+def df__pb_penjualan_(year):
+    query = f'''SELECT
+        fn_whconsiid, fv_artsizecode, fc_monthname, 
+        sum(fn_jualpersize) qty, sum(fn_totalpenjualan) 'value' FROM gis_local.pb_penjualan_{year}
+        group by fn_whconsiid, fv_artsizecode, fc_monthname
+        order by fn_whconsiid, fc_monthname, fv_artsizecode'''
+    with get_engine('imp') as engine:  # Menggunakan context manager dengan with
+        df = pd.read_sql(query, engine)
+    return df
+
 def df__penju(year):
     query = f'''SELECT 
         b.fn_idurut, 
@@ -178,6 +292,21 @@ def df__penju2(year):
         df = pd.read_sql(query, engine)
     return df
 
+def df__tgl_input_penju(year):
+    query = f'''SELECT 
+        fv_nopenjualan, 
+        fd_tglinput
+    FROM 
+        t_penjualanmst a 
+    WHERE 
+        a.fv_nopenjualan LIKE 'PJ%%' 
+        and a.fc_status <> 'F' 
+        and a.fd_tgljual BETWEEN '{year}-01-01 00:00:01' and '{year}-12-31 23:59:59'
+    '''
+    with get_engine('read') as engine:  # Menggunakan context manager dengan with
+        df = pd.read_sql(query, engine)
+    return df
+
 def df__disc2():
     query = f'''SELECT fv_nopenjualan,artsize_disc2nd, artsize_servisfee, 
     artsize_premi, artsize_affiliate, artsize_voucher  from gis_local.disc2artsize_pb'''
@@ -235,7 +364,7 @@ def df__tglso(idwhtoko, tglnow):
             FROM fl_stockarticleconsipostingmst a
             INNER JOIN warehouseconsi_tb c ON a.fn_whconsiid=c.fn_whconsiid
             INNER JOIN customer_tb b ON b.fn_cusid=c.fn_cusid
-            WHERE a.fn_whconsiid = %s AND SUBSTR(a.fd_tglflag, 1, 10) <= %s
+            WHERE a.fn_whconsiid = %s AND SUBSTR(a.fd_tglflag, 1, 10) <= %s and fc_status="X"
             ORDER BY a.fd_tglflag DESC LIMIT 1
             '''
     with get_engine('read') as engine:  # Menggunakan context manager dengan with
@@ -249,7 +378,7 @@ def df__tglso_():
     """
     query = '''
             SELECT DISTINCT a.fn_whconsiid, DATE_FORMAT(a.fd_tglflag, '%%Y-%%m-%%d') AS fd_tglflagIndo
-            FROM fl_stockarticleconsipostingmst a
+            FROM fl_stockarticleconsipostingmst a where fc_status="X"
             '''
     with get_engine('read') as engine:  # Menggunakan context manager dengan with
                 # Mencari tanggal Opname terakhir per tglnow
@@ -286,6 +415,33 @@ def df__tglsa_():
         df = pd.read_sql(query, engine)
     return df
 
+def df_tglsosa(idwhtoko_list_awal,tglEND):
+    # Mencari tanggal SO terakhir utnuk masing-masing toko yang masih buka per tanggal yang dipilih
+    placeholders = ','.join(['%s'] * len(idwhtoko_list_awal))
+    query = f'''SELECT
+        t.fn_whconsiid,
+        COALESCE(so.tgl_so, sa.tgl_sa) AS fd_tglflag,
+        DATE_FORMAT(COALESCE(so.tgl_flag_so, sa.tgl_flag_sa), '%%Y-%%m-%%d') AS fd_tglflagIndo,
+        c.fc_hold, so.fc_status, ifnull(fv_stat_so,fv_stat_sa) fv_stat
+    FROM warehouseconsi_tb t
+    LEFT JOIN (
+        SELECT fn_whconsiid, MAX(fd_tglflag) tgl_so, MAX(fd_tglflag) tgl_flag_so ,fc_status, "so" as fv_stat_so
+        FROM fl_stockarticleconsipostingmst
+        WHERE fc_status='X' AND fd_tglflag <= %s
+        GROUP BY fn_whconsiid
+    ) so ON so.fn_whconsiid = t.fn_whconsiid
+    LEFT JOIN (
+        SELECT fn_whconsiid, MAX(fd_tglinject) tgl_sa, MAX(fd_tglinject) tgl_flag_sa, "sa" as fv_stat_sa
+        FROM saldoawalarticleconsi_tb
+        WHERE fd_tglinject <= %s
+        GROUP BY fn_whconsiid
+    ) sa ON sa.fn_whconsiid = t.fn_whconsiid
+    JOIN customer_tb c ON c.fn_cusid=t.fn_cusid
+    WHERE t.fn_whconsiid IN ({placeholders})'''
+    with get_engine('read') as engine:  # Menggunakan context manager dengan with
+                # Mencari tanggal Opname terakhir per tglnow
+        return pd.read_sql(query, engine, params=tuple([tglEND,tglEND]+idwhtoko_list_awal))
+    
 def df__stock_so(idwhtoko, tglSTR, tglEND):
     query = '''
     select a.fv_artsizecode, a.fn_qtyopname qty
@@ -310,95 +466,136 @@ def df__stock_sa(idwhtoko, tglEND):
         df = pd.read_sql(query, engine, params=(idwhtoko, tglEND))
     return df
 
-def df__transaction(idwhtoko, tglSTR, tglEND):
-    queries = [
-    ''' SELECT b.fv_artsizecode, IFNULL(SUM(b.fn_qtyterima), 0) AS qty
+def df__transaction(idwhtoko, tglSTR, tglEND, fv_stat):
+    
+    if fv_stat=='so':
+        query_stock = f'''
+        select a.fv_artsizecode, a.fn_qtyopname qty
+        from gis_db1.t_historysimpanstokopnamecounter a
+        inner join gis_db1.fl_stockarticleconsipostingmst b on a.fc_nodoc=b.fc_nodoc
+        where b.fn_whconsiid= '{idwhtoko}' AND SUBSTR(b.fd_tglflag, 1, 10) between '{tglSTR}' AND '{tglEND}'
+        GROUP BY a.fv_artsizecode
+        UNION ALL
+        '''
+    elif fv_stat=='sa':
+        query_stock = f'''                
+        select a.fv_artsizecode, a.fn_qty qty
+        from saldoawalarticleconsi_tb a
+        where a.fn_whconsiid= '{idwhtoko}' AND SUBSTR(fd_tglinject, 1, 10) <= '{tglEND}'
+        UNION ALL'''
+    else:query_stock=''
+    query = f''' 
+    SELECT fv_artsizecode, SUM(qty) AS qty
+    FROM (
+        {query_stock}
+    -- Receiving
+        SELECT b.fv_artsizecode, IFNULL(SUM(b.fn_qtyterima), 0) AS qty
         FROM t_receivingmst a
         INNER JOIN t_receivingdtl b ON a.fv_noreceiving=b.fv_noreceiving
         WHERE a.fv_noreceiving LIKE %s AND a.fc_status<>'F'
         AND (a.fd_tglreceive BETWEEN %s AND %s)
-        GROUP BY b.fv_artsizecode''',
-    # AdjustIN
-    ''' SELECT b.fv_artsizecode, IFNULL(SUM(b.fn_qty), 0) AS qty
+        GROUP BY b.fv_artsizecode
+        UNION ALL 
+
+    -- AdjustIN
+        SELECT b.fv_artsizecode, IFNULL(SUM(b.fn_qty), 0) AS qty
         FROM t_adjustconsi_mst a
         INNER JOIN t_adjustconsi_dtl b ON a.fc_nodoc=b.fc_nodoc
         WHERE a.fn_whconsiid= '%s' AND a.fc_status='X' 
         AND b.fc_tipeadj='I' AND b.fn_useridbatal IS NULL
         AND (a.fd_tgladj BETWEEN %s AND %s)
-        GROUP BY b.fv_artsizecode''',
-    # Batal Penjualan
-    ''' SELECT b.fv_artsizecode, IFNULL(SUM(b.fn_jualpersize), 0) AS qty
+        GROUP BY b.fv_artsizecode
+        UNION ALL
+
+    -- Batal Penjualan
+        SELECT b.fv_artsizecode, IFNULL(SUM(b.fn_jualpersize), 0) AS qty
         FROM t_penjualanmst a 
         INNER JOIN t_penjualandtl_goods b ON a.fv_nopenjualan=b.fv_nopenjualan
         WHERE a.fn_cusid= '%s' AND (a.fd_tgljual BETWEEN %s AND %s) 
         AND b.fc_status='F'
-        GROUP BY b.fv_artsizecode''',
-    # Batal Retur
-    ''' SELECT b.fv_artsizecode, IFNULL(SUM(b.fn_qtykirim), 0) AS qty
+        GROUP BY b.fv_artsizecode
+        UNION ALL
+        
+    -- Batal Retur
+        SELECT b.fv_artsizecode, IFNULL(SUM(b.fn_qtykirim), 0) AS qty
         FROM t_returmst a
         INNER JOIN t_returdtl b ON a.fv_noretur=b.fv_noretur
         WHERE a.fn_whconsiid='%s' AND (a.fd_tgltransaksi BETWEEN %s AND %s)
         AND b.fc_status='F'
-        GROUP BY b.fv_artsizecode''',
-    # Batal Mutasi
-    ''' SELECT b.fv_artsizecode, IFNULL(SUM(b.fn_qtykirim), 0) AS qty
+        GROUP BY b.fv_artsizecode
+        UNION ALL
+        
+    -- Batal Mutasi
+        SELECT b.fv_artsizecode, IFNULL(SUM(b.fn_qtykirim), 0) AS qty
         FROM t_mutasimst a
         INNER JOIN t_mutasidtl b ON a.fv_nomutasi=b.fv_nomutasi
         WHERE a.fn_whconsiid='%s' AND (a.fd_tgltransaksi BETWEEN %s AND %s)
         AND b.fc_status='F'
-        GROUP BY b.fv_artsizecode''',
-    # Penjualan
-    ''' SELECT a.fv_artsizecode, IFNULL(SUM(a.fn_jualpersize), 0) * -1 AS qty
+        GROUP BY b.fv_artsizecode
+        UNION ALL
+        
+    -- Penjualan
+        SELECT a.fv_artsizecode, IFNULL(SUM(a.fn_jualpersize), 0) * -1 AS qty
         FROM t_penjualandtl_goods a
         INNER JOIN t_penjualanmst b ON a.fv_nopenjualan=b.fv_nopenjualan
         WHERE b.fn_cusid='%s' AND (b.fd_tgljual BETWEEN  %s AND %s)
         AND a.fv_nopenjualan LIKE 'PJ%%'
-        GROUP BY a.fv_artsizecode''',
-    # AdjustOUT 
-    ''' SELECT b.fv_artsizecode, IFNULL(SUM(b.fn_qty), 0) * -1 AS qty
+        GROUP BY a.fv_artsizecode
+        UNION ALL
+        
+    -- AdjustOUT
+        SELECT b.fv_artsizecode, IFNULL(SUM(b.fn_qty), 0) * -1 AS qty
         FROM t_adjustconsi_mst a
         INNER JOIN t_adjustconsi_dtl b ON a.fc_nodoc=b.fc_nodoc
         WHERE a.fn_whconsiid='%s' AND (a.fd_tgladj BETWEEN %s AND %s)
         AND a.fc_status='X' AND b.fc_tipeadj='O' AND b.fn_useridbatal IS NULL
-        GROUP BY b.fv_artsizecode''',
-    # Retur 
-    ''' SELECT a.fv_artsizecode, IFNULL(SUM(a.fn_qtykirim), 0) * -1 AS qty
+        GROUP BY b.fv_artsizecode
+        UNION ALL
+
+    -- Retur
+        SELECT a.fv_artsizecode, IFNULL(SUM(a.fn_qtykirim), 0) * -1 AS qty
         FROM t_returdtl a
         INNER JOIN t_returmst b ON a.fv_noretur=b.fv_noretur
         WHERE b.fn_whconsiid='%s' AND a.fv_noretur LIKE 'RT%%'
         AND (b.fd_tgltransaksi BETWEEN %s AND %s)
-        GROUP BY a.fv_artsizecode''',
-    # Mutasi
-    ''' SELECT a.fv_artsizecode, IFNULL(SUM(a.fn_qtykirim), 0) * -1 AS qty
+        GROUP BY a.fv_artsizecode
+        UNION ALL
+        
+    -- Mutasi
+        SELECT a.fv_artsizecode, IFNULL(SUM(a.fn_qtykirim), 0) * -1 AS qty
         FROM t_mutasidtl a
         INNER JOIN t_mutasimst b ON a.fv_nomutasi=b.fv_nomutasi
         WHERE b.fn_whconsiid='%s' AND a.fv_nomutasi LIKE 'MT%%'
         AND (b.fd_tgltransaksi BETWEEN %s AND %s)
-        GROUP BY a.fv_artsizecode'''
-    # Tambahkan query lainnya...
-    ]
+        GROUP BY a.fv_artsizecode
+        )x
+    GROUP BY fv_artsizecode
+    '''
+    
     with get_engine('read') as engine_read:
     # Membuat DataFrame gabungan
         # DataFrame untuk menyimpan hasil
         combined = pd.DataFrame()
-
-        for query in queries:
-            # Menentukan parameter query
-            if "t_receivingdtl" in query:
-                params = (f"%/{idwhtoko}", tglSTR, tglEND)
-            else:
-                params = (idwhtoko, tglSTR, tglEND)
-
-            try:
-                # Eksekusi query
-                df = pd.read_sql(query, engine_read, params=params)
-                # Pastikan nama kolom konsisten
-                df.columns = ['fv_artsizecode', 'qty']
-                # Gabungkan hasil
-                combined = pd.concat([combined, df], ignore_index=True)
-            except Exception as e:
-                print(f"Error executing query: {query[:100]}... | Error: {e}")
-
+        params = (
+            f"%/{idwhtoko}", tglSTR, tglEND,
+            idwhtoko, tglSTR, tglEND,
+            idwhtoko, tglSTR, tglEND,
+            idwhtoko, tglSTR, tglEND,
+            idwhtoko, tglSTR, tglEND,
+            idwhtoko, tglSTR, tglEND,
+            idwhtoko, tglSTR, tglEND,
+            idwhtoko, tglSTR, tglEND,
+            idwhtoko, tglSTR, tglEND
+        )
+        try:
+            # Eksekusi query
+            df = pd.read_sql(query, engine_read, params=params)
+            # Pastikan nama kolom konsisten
+            df.columns = ['fv_artsizecode', 'qty']
+            # Gabungkan hasil
+            combined = pd.concat([combined, df], ignore_index=True)
+        except Exception as e:
+            print(f"Error executing query: {query[:100]}... | Error: {e}")
     return combined
 
 def df__cus():
@@ -489,6 +686,14 @@ def df__sales_thru_24(col):
 def df__sales_thru_25(col):
     query = f'''
         SELECT {col} FROM gis_local.sales_thru_pb_25
+        '''
+    with get_engine('imp') as engine_imp:
+        df = pd.read_sql(query, engine_imp)
+    return df
+
+def df__sales_thru_26(col):
+    query = f'''
+        SELECT {col} FROM gis_local.sales_thru_pb_26
         '''
     with get_engine('imp') as engine_imp:
         df = pd.read_sql(query, engine_imp)
@@ -718,7 +923,7 @@ def df__rtt():
         '''
         df= pd.read_sql(query, engine)
         print(today_str)
-        print(query)
+        # print(query)
     return df
     
 def fetch_data_margin(year):
@@ -888,33 +1093,21 @@ def df__otsdo():
         '''
         df= pd.read_sql(query, engine)
     return df
-def df__otsdo():
-    today = date.today()
-    year = today.year
-    with get_engine('read') as engine:
-        query= f'''SELECT 
-        a.fc_nodoc ,fv_artsizecode, sum(fn_qty) fn_qty, fd_date, b.fc_status, fn_whconsiid, b.fd_dateinput
-        FROM gis_db1.dodtl_tb a 
-        inner join gis_db1.domst_tb b on a.fc_nodoc=b.fc_nodoc
-        inner join gis_db1.t_ordermst c on b.fc_noreff=fv_noorder
-        left join gis_db1.t_receivingmst d on b.fc_nodoc=d.fc_nosj
-        left join gis_db1.warehouseconsi_tb e on c.fn_cusid=e.fn_cusid
-        where  fv_noreceiving is null and fd_date > '{year}-01-01 00:00:00'and b.fc_status="F" 
-        group by fn_whconsiid, fv_artsizecode, fd_date 
-        '''
-        df= pd.read_sql(query, engine)
-    return df
 
 def df__otsdo_rt(tglinput):
     with get_engine('write') as engine:
-        query= f'''SELECT 
-        a.fc_nodoc ,fv_artsizecode, sum(fn_qty) fn_qty, fd_date, b.fc_status, c.fn_cusid, b.fd_dateinput
+        query= f'''SELECT distinct 
+        fn_cusid, fv_artsizecode, fn_userid,
+        a.fc_nodoc "No DO",
+        fd_date "Tgl Transaksi",
+        b.fd_dateinput "Tgl Pengajuan",
+        sum(fn_qty) OstDO,  b.fc_status 
         FROM gis_db.dodtl_tb a 
         inner join gis_db.domst_tb b on a.fc_nodoc=b.fc_nodoc
         inner join gis_db.t_ordermst c on b.fc_noreff=fv_noorder
         left join gis_db.t_receivingmst d on b.fc_nodoc=d.fc_nosj
-        where  fv_noreceiving is null and b.fd_dateinput > '{tglinput}' and b.fc_status="F" 
-        group by fc_nodoc, fn_cusid, fv_artsizecode, fd_date 
+        where fv_noreceiving is null and b.fd_dateinput > '{tglinput} 00:00:00' and b.fc_status="F" 
+        group by a.fc_nodoc, fn_cusid, fv_artsizecode, fd_date 
         '''
         df= pd.read_sql(query, engine)
     return df
@@ -958,6 +1151,22 @@ def df__otsdm():
         df= pd.read_sql(query, engine)
     return df
 
+def df__otsob():
+    query='''SELECT distinct  
+        fn_cusid, fv_artsizecode, fn_userid,
+        b.fv_noorder "No OB",
+        fd_tglorder "Tgl Pengajuan", 
+        fd_tgldelivery "Tgl On Store",
+        sum(fn_orderpersize) OstOB,
+          fv_keteranganumum "Keterangan Umum"  FROM gis_db.t_orderdtl_goods_tmp a 
+        inner join gis_db.t_ordermst b on a.fv_noorder=b.fv_noorder
+        left join gis_db.domst_tb c on b.fv_noorder=c.fc_noreff
+        where fc_nodoc is null
+        group by fn_cusid, fv_artsizecode'''
+    with get_engine('write') as engine:  # Menggunakan context manager dengan with
+        df = pd.read_sql(query, engine)
+    return df
+
 def df__artikel_status():
     query='''select fn_articleid, fv_status from gis_db.articlestatus_tb'''
     with get_engine('write') as engine:  # Menggunakan context manager dengan with
@@ -980,3 +1189,65 @@ def df__aging_gudang():
     with get_engine('read') as engine:  # Menggunakan context manager dengan with
         df = pd.read_sql(query_gr, engine)
     return df
+
+def df__stock_today_all_store():
+    input_value = datetime.now().strftime("%Y-%m-%d")   
+    year = datetime.now().year
+    sales_thru=f'sales_thru_pb_{str(year)[-2:]}'
+    trxstx = f"trxstx_pb{str(year)[-2:]}"
+    stock = f"fn_stock_{input_value[5:7]}"
+
+    main_query = f"""
+        SELECT stock_backdate.fn_whconsiid,stock_backdate.fv_artsizecode,fv_barcode, fv_sizename, a.fv_configname,stock stocks
+        FROM (
+            SELECT fn_whconsiid, {stock} AS stock, b.fv_artsizecode 
+            FROM gis_local.{sales_thru} b
+            LEFT JOIN artikel_pb a ON b.fv_artsizecode = a.fv_artsizecode
+            where 1=1
+            UNION ALL
+            SELECT fn_whconsiid, fn_stock AS stock, b.fv_artsizecode 
+            FROM gis_local.{trxstx} b
+            LEFT JOIN artikel_pb a ON b.fv_artsizecode = a.fv_artsizecode
+            WHERE fd_tgltrx BETWEEN '{str(year)[-2:]}-{input_value[5:7]}-01' AND '{str(year)[-2:]}-{input_value[5:10]}'
+            UNION ALL
+            SELECT fn_whconsiid, fn_stock AS stock, b.fv_artsizecode 
+            FROM gis_local.trxrt_pb b
+            LEFT JOIN artikel_pb a ON b.fv_artsizecode = a.fv_artsizecode
+            WHERE fd_tgltrx < '{str(year)[-2:]}-{input_value[5:10]}' 
+            UNION ALL
+            SELECT fn_whconsiid, fn_stock AS stock, b.fv_artsizecode 
+            FROM gis_local.Stock_varian_{str(year)[-2:]} b
+            LEFT JOIN artikel_pb a ON b.fv_artsizecode = a.fv_artsizecode
+            WHERE fd_tgl BETWEEN '{str(year)[-2:]}-{input_value[5:7]}-01' AND '{str(year)[-2:]}-{input_value[5:10]}'
+        ) stock_backdate
+        LEFT JOIN artikel_pb a ON a.fv_artsizecode = stock_backdate.fv_artsizecode
+        LEFT JOIN customers_pb b ON stock_backdate.fn_whconsiid = b.fn_whconsiid
+        WHERE 1=1 
+        """
+    with get_engine('imp') as engine:
+        df = pd.read_sql(main_query, engine)
+    return df
+
+def df__stock_wh():
+    query = f"""
+            SELECT 
+                fv_whtypename, fv_artsizecode, fn_qty 
+            FROM gis_db.stockarticle_tb a 
+            LEFT JOIN gis_db.warehousetype_tb b 
+                ON a.fn_whtypeid = b.fn_whtypeid
+            WHERE 1=1 
+            AND fn_qty > 0
+        """
+    with get_engine('write') as engine:  # Menggunakan context manager dengan with
+        df = pd.read_sql(query, engine)
+    return df
+
+def df__aging_gudang_pb():
+    query = f"""
+            SELECT 
+                fn_articleid, fn_hari 
+            FROM gis_local.aging_gudang_pb 
+        """
+    with get_engine('imp') as engine:  # Menggunakan context manager dengan with
+        df_aging = pd.read_sql(query, engine)
+    return df_aging

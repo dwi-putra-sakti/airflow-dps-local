@@ -1,7 +1,10 @@
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from datetime import datetime
+import pandas as pd
 import os
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src', 'modules'))
 
 def write_to_smb():
     smb_path = os.getenv("SMB_PATH", "/opt/share")  # fallback default
@@ -16,6 +19,7 @@ def read_from_smb():
     with open(file_path, "r") as f:
         content = f.read()
     print(f"Read from {file_path}:\n{content}")
+
 
 with DAG(
     dag_id="test_smb_access",
@@ -34,5 +38,4 @@ with DAG(
         task_id="read_from_smb",
         python_callable=read_from_smb,
     )
-
-    write_task >> read_task
+    write_task >> read_task 
