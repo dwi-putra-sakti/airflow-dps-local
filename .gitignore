@@ -1,0 +1,79 @@
+# ==========================================
+# File Data Berat & Format Analisis Data
+# ==========================================
+*.xlsx
+*.xls
+*.xlsm
+*.parquet
+*.pq
+*.feather
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.csv
+
+# Jupyter Notebook & Checkpoints
+*.ipynb
+.ipynb_checkpoints/
+
+# ==========================================
+# Python Bytecode & Cache
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ==========================================
+# Virtual Environment
+# ==========================================
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ==========================================
+# Environment Variables & Secrets
+# ==========================================
+.env
+.env.*
+!.env.example
+
+# ==========================================
+# Apache Airflow Logs & PIDs
+# ==========================================
+logs/
+airflow.db
+airflow.cfg
+airflow-webserver.pid
+airflow-worker.pid
+airflow-scheduler.pid
+standalone_admin_password.txt
+
+# ==========================================
+# Database Files
+# ==========================================
+*.sqlite3
+*.db
+
+# ==========================================
+# File Log & Output Sementara
+# ==========================================
+*.log
+output_supp_*.txt
+output_*.txt
+
+# ==========================================
+# OS & Editor
+# ==========================================
+desktop.ini
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/

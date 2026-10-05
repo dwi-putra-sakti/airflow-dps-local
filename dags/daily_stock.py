@@ -28,6 +28,6 @@ with DAG(
 
     t1 = PythonOperator(task_id='trx_rt_task', 
                         python_callable=stock_daily, op_args=[],)
-    t2 = PythonOperator(task_id='sls_rt_task', 
-                        python_callable=sales_daily, op_args=[2025],)
-    t1>>t2
+    # t2 = PythonOperator(task_id='sls_rt_task', 
+    #                     python_callable=sales_daily, op_args=[2025],)
+    t1

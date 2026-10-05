@@ -6,7 +6,8 @@ import sys
 sys.path.append("/opt/airflow/src")
 
 from main import (md_artikel_size, md_artikel_size2, mini_consigment_sales, ost_ob,ost_do,
-                  stock_borken_aging,master_gudang,md_artikel_size_26)
+                  stock_borken_aging,master_gudang,md_artikel_size_26,fstok_gudang, 
+                  penjualan_by_table, md_status_artikel, stock_by_artikel)
 import os
 from dotenv import load_dotenv
 import pendulum
@@ -38,10 +39,10 @@ with DAG(
     #     timeout=600, # tunggu maksimal 10 menit
     # )
     
-    stock_artsize_md1 = PythonOperator(
-        task_id='md_artikel_size_task',
-        python_callable=md_artikel_size,
-        op_args=[],)
+    # stock_artsize_md1 = PythonOperator(
+    #     task_id='md_artikel_size_task',
+    #     python_callable=md_artikel_size,
+    #     op_args=[],)
     
     stock_artsize_md26 = PythonOperator(
         task_id='md_artikel_size_26_task',
@@ -53,11 +54,11 @@ with DAG(
         python_callable=md_artikel_size2,
         op_args=[],)
     
-    mini_consigment_task_25 = PythonOperator(
-        task_id='mini_consigment_task',
-        python_callable=mini_consigment_sales,
-        op_args=[2025],
-        )
+    # mini_consigment_task_25 = PythonOperator(
+    #     task_id='mini_consigment_task',
+    #     python_callable=mini_consigment_sales,
+    #     op_args=[2025],
+    #     )
 
     mini_consigment_task_26 = PythonOperator(
         task_id='mini_consigment_26_task',
@@ -85,5 +86,27 @@ with DAG(
         python_callable=master_gudang,
         op_args=[],)
     
-    (stock_artsize_md1 >> stock_artsize_md2 >> mini_consigment_task_25 >> out_standing_ob >> 
-     out_standing_do >> stock_borken_aging >> master_gudang >> stock_artsize_md26 >> mini_consigment_task_26)
+    fstok_gudang = PythonOperator(
+        task_id='fstok_gudang_task',
+        python_callable=fstok_gudang,
+        op_args=[],)
+    
+    md_status_artikel = PythonOperator(
+            task_id='md_status_artikel_task',
+            python_callable=md_status_artikel,
+            op_args=[],)
+    
+    penjualan_by_table = PythonOperator(
+            task_id='penjualan_by_table_task',
+            python_callable=penjualan_by_table,
+            op_args=[2026],)
+    
+    stock_by_artikel_ = PythonOperator(
+            task_id='stock_by_artikel_task',
+            python_callable=stock_by_artikel,
+            op_args=[],)
+    
+    ( out_standing_ob >> 
+     out_standing_do >> stock_borken_aging >> master_gudang  
+     >> mini_consigment_task_26 >> fstok_gudang >> stock_artsize_md2 >> penjualan_by_table
+     >> md_status_artikel >> stock_artsize_md26 >> stock_by_artikel_)

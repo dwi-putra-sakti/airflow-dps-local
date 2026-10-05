@@ -1,0 +1,7 @@
+# Airflow ignore patterns for legacy dags directory
+Supp_data_PB.py
+test_scr.py
+test_script.ipynb
+*.xlsx
+*.csv
+__pycache__/

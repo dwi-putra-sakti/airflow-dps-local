@@ -6,7 +6,8 @@ from datetime import datetime, timedelta
 import sys
 sys.path.append("/opt/airflow/src")
 
-from main import upsert_artikel_pb , upsert_customers_pb, upsert_tgl_so_sa, upsert_whtype, upsert_master,aging_gudang_pb
+from main import (upsert_artikel_pb , upsert_customers_pb, upsert_tgl_so_sa, upsert_whtype, 
+                upsert_master,aging_gudang_pb,upsert_expedition_tracking)
 import os
 from dotenv import load_dotenv
 import pendulum
@@ -61,4 +62,9 @@ with DAG(
         task_id='upsert_aging_gudang_pb',
         python_callable=aging_gudang_pb,
         op_args=[],)  
-    t2>>t1>>t3>>t4>>t5>>t6
+
+    t7 = PythonOperator(
+        task_id='upsert_expedition_tracking',
+        python_callable=upsert_expedition_tracking,
+        op_args=[],) 
+    t2>>t1>>t3>>t4>>t5>>t6>>t7

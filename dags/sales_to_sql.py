@@ -4,7 +4,7 @@ from datetime import datetime
 import sys
 sys.path.append("/opt/airflow/src")
 
-from main import sales_to_sql 
+from main import sales_to_sql
 import os
 from dotenv import load_dotenv
 # Load env variables
@@ -31,20 +31,20 @@ with DAG(
 ) as dag:
 
     # Buat task untuk menjalankan fungsi Python
-    t1 = PythonOperator(
+    # t1 = PythonOperator(
+    #     task_id='sales_to_sql_task_2023',
+    #     python_callable=sales_to_sql,
+    #     op_args=[2023],
+    # )
+    # t2 = PythonOperator(
+    #     task_id='sales_to_sql_task_2024',
+    #     python_callable=sales_to_sql,
+    #     op_args=[2024],
+    # )
+    t3 = PythonOperator(
         task_id='sales_to_sql_task_2025',
         python_callable=sales_to_sql,
         op_args=[2025],
-    )
-    t2 = PythonOperator(
-        task_id='sales_to_sql_task_2024',
-        python_callable=sales_to_sql,
-        op_args=[2024],
-    )
-    t3 = PythonOperator(
-        task_id='sales_to_sql_task_2023',
-        python_callable=sales_to_sql,
-        op_args=[2023],
     )   
     # t1 >> t2 >> 
     t3

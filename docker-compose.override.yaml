@@ -1,0 +1,67 @@
+# ==============================================================================
+# Docker Compose Override for Optimized Airflow (dags_opt & src_opt)
+# ==============================================================================
+# This file is automatically loaded by Docker Compose alongside docker-compose.yaml.
+# It mounts dags_opt and src_opt, fixes PYTHONPATH, and accelerates airflow-init.
+# ==============================================================================
+
+services:
+  airflow-webserver:
+    environment:
+      PYTHONPATH: /opt/airflow/src_opt:/opt/airflow/src:/opt/airflow:/home/airflow/.local/lib/python3.8/site-packages
+      AIRFLOW__CORE__DAG_IGNORE_FILE_SYNTAX: 'glob'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    volumes:
+      - ${AIRFLOW_PROJ_DIR:-.}/dags_opt:/opt/airflow/dags/dags_opt
+      - ${AIRFLOW_PROJ_DIR:-.}/src_opt:/opt/airflow/src_opt
+
+  airflow-scheduler:
+    environment:
+      PYTHONPATH: /opt/airflow/src_opt:/opt/airflow/src:/opt/airflow:/home/airflow/.local/lib/python3.8/site-packages
+      AIRFLOW__CORE__DAG_IGNORE_FILE_SYNTAX: 'glob'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    volumes:
+      - ${AIRFLOW_PROJ_DIR:-.}/dags_opt:/opt/airflow/dags/dags_opt
+      - ${AIRFLOW_PROJ_DIR:-.}/src_opt:/opt/airflow/src_opt
+
+  airflow-worker:
+    environment:
+      PYTHONPATH: /opt/airflow/src_opt:/opt/airflow/src:/opt/airflow:/home/airflow/.local/lib/python3.8/site-packages
+      AIRFLOW__CORE__DAG_IGNORE_FILE_SYNTAX: 'glob'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    volumes:
+      - ${AIRFLOW_PROJ_DIR:-.}/dags_opt:/opt/airflow/dags/dags_opt
+      - ${AIRFLOW_PROJ_DIR:-.}/src_opt:/opt/airflow/src_opt
+
+  airflow-triggerer:
+    environment:
+      PYTHONPATH: /opt/airflow/src_opt:/opt/airflow/src:/opt/airflow:/home/airflow/.local/lib/python3.8/site-packages
+      AIRFLOW__CORE__DAG_IGNORE_FILE_SYNTAX: 'glob'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    volumes:
+      - ${AIRFLOW_PROJ_DIR:-.}/dags_opt:/opt/airflow/dags/dags_opt
+      - ${AIRFLOW_PROJ_DIR:-.}/src_opt:/opt/airflow/src_opt
+
+  airflow-init:
+    environment:
+      PYTHONPATH: /opt/airflow/src_opt:/opt/airflow/src:/opt/airflow:/home/airflow/.local/lib/python3.8/site-packages
+      AIRFLOW__CORE__DAG_IGNORE_FILE_SYNTAX: 'glob'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    command:
+      - -c
+      - |
+        echo "Fast initializing Airflow (skipping slow chown -R on Windows mount)..."
+        mkdir -p /sources/logs /sources/dags /sources/plugins
+        exec /entrypoint airflow version
+    volumes:
+      - ${AIRFLOW_PROJ_DIR:-.}/dags_opt:/opt/airflow/dags/dags_opt
+      - ${AIRFLOW_PROJ_DIR:-.}/src_opt:/opt/airflow/src_opt
+
+  airflow-cli:
+    environment:
+      PYTHONPATH: /opt/airflow/src_opt:/opt/airflow/src:/opt/airflow:/home/airflow/.local/lib/python3.8/site-packages
+      AIRFLOW__CORE__DAG_IGNORE_FILE_SYNTAX: 'glob'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    volumes:
+      - ${AIRFLOW_PROJ_DIR:-.}/dags_opt:/opt/airflow/dags/dags_opt
+      - ${AIRFLOW_PROJ_DIR:-.}/src_opt:/opt/airflow/src_opt

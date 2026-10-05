@@ -1,0 +1,12 @@
+# Airflow ignore patterns for dags_opt
+*.md
+*.txt
+*.xlsx
+*.xls
+*.csv
+*.parquet
+*.json
+*.sql
+*.ipynb
+*test*
+__pycache__

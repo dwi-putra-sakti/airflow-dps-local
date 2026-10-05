@@ -1,14 +1,19 @@
 from modules.queries import (df__tglso, df__tglsa, df__disc2, df__margin, df__artsizecode, df__stock_so,
-                             df__stock_sa, df__retur, df__size, generate_months_for_year, df__rtt,
-                             df__sls_putus_disc, df__aging, df__customers_pb)
+                             df__stock_sa, df__retur, df__size, generate_months_for_year, df__rtt,df__penju_tabel,
+                             df__sls_putus_disc, df__aging, df__customers_pb,df__date_arrival,list_to_sql_in,
+                             df_artikel_pb_, df__domst_tb,df__customers_pb_,df__otsdmdo_rt, df__ots_retur_gd)
 from modules.db_connection import get_engine
 from sqlalchemy import Integer, String, CHAR, DateTime, Text, text, Float, Numeric
 import numpy as np
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy import MetaData
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.orm import sessionmaker
+
+import openpyxl
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 import traceback
 import os
 
@@ -117,7 +122,9 @@ def rename_col_sql_to_xlsx_gis(df):
         'fv_status':'Status Produksi',
         'fv_colorname':'Color',
         'fv_fitting':'Fitting',
-        'motif':'Motif'
+        'motif':'Motif',
+        'fn_total_disc2':"Disc Nota"
+        # 'fv_namemark':'Status Master'
 
     }
     # Lakukan rename dan sort
@@ -125,7 +132,7 @@ def rename_col_sql_to_xlsx_gis(df):
     return df
 
 def insert_pk(df):
-    df_artsizecode = df__artsizecode()
+    df_artsizecode = df__artsizecode(stat='write')
     df=pd.merge(df,df_artsizecode,on='fv_artsizecode',how='left')
     df["fd_tgltrx"] = pd.to_datetime(df["fd_tgltrx"], format="%d/%m/%Y").dt.strftime('%y%m%d')
     df["pk_id"] = df["fn_whconsiid"].astype(str) + "/" + df["fd_tgltrx"] + "/" + df["fn_artsizeid"].astype(str)
@@ -176,8 +183,10 @@ def save_to_sql(df, table_name, engine):
     """Menyimpan data ke dalam database menggunakan SQLAlchemy."""
     with get_engine(engine) as engine:
         sql_types = define_sql_types(df)
-        df.to_sql(table_name, con=engine, if_exists='replace', index=False, dtype=sql_types)
-from sqlalchemy import text
+        df.to_sql(table_name, con=engine, if_exists='replace', index=False, 
+        chunksize=5000,   # 🔥 penting
+        method='multi', 
+        dtype=sql_types)
 
 def add_index(engine, table_name, index_cols):
     """
@@ -466,7 +475,7 @@ def merge_and_calculate(sales_data, stock_data, start_year, end_year):
 
 
 def merge_detail(final_data, stock_data, start_year, end_year):
-    df_articlesize = df__artsizecode()
+    df_articlesize = df__artsizecode(stat='write')
     df_size = df__size()
 
     final_data = pd.merge(final_data, df_articlesize, on='fv_artsizecode', how='left')
@@ -570,14 +579,14 @@ def generate_rename_dict(start_year, end_year, df):
 
     # Dictionary tambahan untuk kolom di luar bulan
     other_columns = {
-        'fn_qty_retur': 'qty retur',
+        'fn_qty_retur': f'qty retur {str(year)}',
         'fv_sizename': 'size',
         'fc_code': 'code toko',
         'fv_toko': 'toko',
         'fv_barcode':'artikel',
-        'fn_total_sales_qty': 'total sales qty',
-        'fn_stock_at': 'stock akhir',
-        'fn_ts_all': 'total stock',
+        'fn_total_sales_qty': f'total sales qty {str(year)}',
+        'fn_stock_at': f'stock akhir {str(year)}',
+        'fn_ts_all': f'total stock {str(year)}',
         'stock':'stock gudang'
     }
 
@@ -726,6 +735,7 @@ def process_data_cus(df):
 
     df["fc_detail_tok"] = df.apply(add_detail_tok, axis=1)
     df.loc[(df['fv_neotoko'].isnull()) & (df['fc_code'].str.startswith('BZ')), 'fv_neotoko'] = "Bazar"
+    df=df.rename(columns={'fv_configname':'fv_storetype'})
     return df
 
 def upsert_data(engine, table_name, df, primary_key="fn_whconsiid"):
@@ -817,14 +827,13 @@ def delete_rows(engine, table_name, df_filtered, primary_key="fn_whconsiid"):
             session.close()
 
 def add_ornal(row):
-    acara = row.get('fv_status', '')  # diasumsikan ini sama dengan Artikel[acara]
+    acara = str(row.get('fv_namemark') or '')  # diasumsikan ini sama dengan Artikel[acara]
     kategori = row.get('fv_catname', '')
     harga = row.get('fm_amount', 0)
-
     # Acara diskon langsung jadi "Obral"
-    if acara in ["DISC 50%", "DISC 70%", "DISC 50+20%"]:
+    if acara.startswith(("SP", "FP")) or acara in ["DISC 50%", "DISC 70%", "DISC 50+20%"]:
         return "Obral"
-    if acara in ["NORMAL"]:
+    elif acara.startswith("NP") or acara == "NORMAL":
         return "Normal"
     rules = {
         "LONG SLEEVE SHIRT": 229000,
@@ -1028,7 +1037,7 @@ def proc_pivot_table(df):
     )
 
     # Hitung total jumlah qty size (sumQty)
-    pivot_table['sumQty'] = pivot_table[size_columns].sum(axis=1)
+    pivot_table['sumQty'] = pivot_table[all_sizes].sum(axis=1)
     pivot_table=pivot_table.drop(columns=['fv_configname'])
 
     return pivot_table
@@ -1086,7 +1095,7 @@ def get_stock_data_parquet(parquet_base, start_year, end_year, months=None):
 
     # normalisasi bulan
     if months is None:
-        month_list = range(1, 13)
+        month_list = range(1, 14)
     elif isinstance(months, int):
         month_list = [months]
     else:
@@ -1129,3 +1138,401 @@ def get_stock_data_parquet(parquet_base, start_year, end_year, months=None):
         print("⚠️ Kolom wajib tidak lengkap:", required_cols)
 
     return combined_data
+
+def get_nodo_tglreceive(import_sql: str,year):
+    import_sql = import_sql.lower()
+    if import_sql not in ['yes', 'no']:
+        raise ValueError("Parameter 'import_sql' harus berupa 'yes' atau 'no'.")
+
+    base_path = r'/opt/share'
+    found_file = None
+    # print('test')
+    # =========================
+    # Cari file (mundur 7 hari)
+    # =========================
+    for i in range(7):
+        check_date = (datetime.today() - timedelta(days=i)).strftime("%d-%b-%Y")
+        candidate = fr"{base_path}/TRACKING RESI {year} ({check_date}).xlsx"
+        if os.path.exists(candidate):
+            found_file = candidate
+            print(f"File ditemukan: {candidate}")
+            break
+
+    if not found_file:
+        return (
+            f"Tidak ada file TRACKING RESI {year} untuk 7 hari terakhir."
+        )
+    
+    # print('test')
+    # =========================
+    # Baca Excel
+    # =========================
+    xl = pd.ExcelFile(found_file)
+    sheet_names = xl.sheet_names
+    required_cols = [
+        'No. DO',
+        'Date of Receipt',
+        'Description',
+        'No. Tracking Number'
+    ]
+    dfs = []
+    def read_sheet(sheet_name):
+        df = (
+            pd.read_excel(found_file, sheet_name=sheet_name, header=3)
+              .dropna(how='all')
+        )
+
+        missing_cols = set(required_cols) - set(df.columns)
+        if missing_cols:
+            raise ValueError(
+                f"Sheet '{sheet_name}' tidak memiliki kolom: {missing_cols}"
+            )
+        return df[required_cols]
+
+    # sheet terakhir (wajib)
+    dfs.append(read_sheet(sheet_names[-1]))
+
+    # sheet sebelum terakhir (jika ada)
+    if len(sheet_names) > 1:
+        dfs.append(read_sheet(sheet_names[-2]))
+
+    df_combi = pd.concat(dfs, ignore_index=True)
+    df_combi['Description'] = df_combi['Description'].astype(str).str.split(',').str[0]
+    # =========================
+    # Ambil data existing SQL
+    # =========================
+    df_doa = df__date_arrival()
+    # print('test')
+    # =========================
+    # Gabung & Bersihkan
+    # =========================
+    df_final = pd.concat([df_doa, df_combi], ignore_index=True)
+
+    df_final['Date of Receipt'] = pd.to_datetime(
+        df_final['Date of Receipt'],
+        errors='coerce'
+    )
+    df_final = (
+        df_final
+        # .sort_values('Date of Receipt')
+        .drop_duplicates(subset=['No. DO'], keep='last')
+        [['No. DO', 'Date of Receipt', 'Description', 'No. Tracking Number']]
+    )
+    # Pembaharuan do baru dan lama
+    df_doread = df__domst_tb('fc_nodoc',distinct=False,where=f"and fc_nodoc like 'DO%%'")
+    # df_doread = pd.read_sql(
+    # "SELECT fc_nodoc FROM domst_tb where and fc_nodoc like 'DO%%'",
+    # con=engine2
+    # )
+    df_doread=df_doread[df_doread['fc_nodoc'].str.count('/')==4]
+    df_doread[['No. DO','user']]=df_doread['fc_nodoc'].str.rsplit('/',n=1,expand=True)
+    df_doread['user']='/'+df_doread['user']
+    df_final=df_final.merge(df_doread[['No. DO','fc_nodoc']], how='left',on='No. DO')
+    df_final['No. DO']=np.where(df_final['fc_nodoc'].isna(),df_final['No. DO'],df_final['fc_nodoc'])
+    df_final=df_final.drop(columns='fc_nodoc')
+    df_final=df_final.rename({'Description':'fv_description'})
+    # =========================
+    # Simpan ke SQL (opsional)
+    # =========================
+
+    save_to_sql(df_final, 'date_arrival_do', 'imp')
+    # if import_sql == 'yes':
+    #     df_final.to_sql(
+    #         'date_arrival_do',
+    #         engine,
+    #         if_exists='replace',
+    #         index=False
+    #     )
+
+    return df_final
+
+
+def get_penjualan_tabel(year):
+    df_table=df__penju_tabel(year)
+    df_art=df_artikel_pb_("fv_artsizecode,fv_divname Divisi")
+    df_cus=df__customers_pb_("fn_whconsiid,fc_code 'kode Toko',fv_toko Toko")
+    df_sum=df_cus.merge(df_table,how='right',on='fn_whconsiid')
+    df_sum=df_sum.merge(df_art,how='left',on='fv_artsizecode')
+    df_sum['tgltrx'] = pd.to_datetime(df_sum['tgltrx'], format='%m-%d-%Y')
+    df_sum['Bulan'] = df_sum['tgltrx'].dt.strftime('%m')
+    df_sum['Nama Bulan'] = df_sum['tgltrx'].dt.strftime('%B')
+    df_sum['Tahun'] = df_sum['tgltrx'].dt.year
+    mapping_tabel = {
+        1: "Counter",
+        2: "Location 1",
+        3: "Location 2",
+        4: "Location 3",
+        5: "Location 4",
+        6: "Bazaar",
+        7: "Borongan",
+        8: "Online",
+        9: "Table",
+        11: "Fair",
+    }
+
+    # 2. Tambahkan kolom baru ke DataFrame utama (asumsi nama dataframe adalah df)
+    df_sum["Lokasi"] = df_sum["fn_tabel"].map(mapping_tabel)
+    df=df_sum
+    # Asumsi `df` adalah DataFrame utama Anda
+
+    # 1. Daftar semua Lokasi baru sesuai urutan
+    all_locations = [
+        "Counter",
+        "Location 1",
+        "Location 2",
+        "Location 3",
+        "Location 4",
+        "Bazaar",
+        "Borongan",
+        "Online",
+        "Table",
+        "Fair",
+    ]
+
+    # 2. Definisikan Styling Excel
+    font_header = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+    fill_header = PatternFill(
+        start_color="1F4E78", end_color="1F4E78", fill_type="solid"
+    )  # Navy Dark
+
+    font_data = Font(name="Calibri", size=9)
+    font_bold = Font(name="Calibri", size=9, bold=True)
+
+    fill_zebra = PatternFill(
+        start_color="F9FAFB", end_color="F9FAFB", fill_type="solid"
+    )
+    fill_total = PatternFill(
+        start_color="E2EFDA", end_color="E2EFDA", fill_type="solid"
+    )  # Hijau Muted Total
+
+    thin_border_side = Side(border_style="thin", color="D9D9D9")
+    border_cell = Border(
+        left=thin_border_side,
+        right=thin_border_side,
+        top=thin_border_side,
+        bottom=thin_border_side,
+    )
+
+    thick_top = Side(border_style="thin", color="000000")
+    double_bottom = Side(border_style="double", color="000000")
+    border_total = Border(
+        top=thick_top,
+        bottom=double_bottom,
+        left=thin_border_side,
+        right=thin_border_side,
+    )
+
+    # WRAP TEXT pada Header diaktifkan
+    align_header = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    align_left = Alignment(horizontal="left", vertical="center")
+    align_center = Alignment(horizontal="center", vertical="center")
+    align_right = Alignment(horizontal="right", vertical="center")
+
+    # 3. Grouping data per Tahun dan Bulan
+    grouped = df.groupby(["Tahun", "Bulan", "Nama Bulan"])
+
+    for (tahun, bulan, namabulan), group in grouped:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = f"Laporan {namabulan}"
+        ws.views.sheetView[0].showGridLines = True
+
+        # Pivot Table Data
+        pt = pd.pivot_table(
+            group,
+            index=["Toko", "Divisi", "Obral/Normal"],
+            columns="Lokasi",
+            values=["Total_Rupiah", "Qty"],
+            aggfunc="sum",
+            fill_value=0,
+        )
+
+        # Filter lokasi yang ada pada data bulan tersebut
+        present_locations = [
+            loc for loc in all_locations if loc in pt.columns.levels[1]
+        ]
+
+        # --- Header Level 1 & 2 ---
+        ws.cell(row=1, column=1, value="Toko")
+        ws.cell(row=1, column=2, value="Divisi")
+        ws.cell(row=1, column=3, value="Obral / Normal")
+        ws.cell(row=1, column=4, value="Total Sales Rp")
+        ws.cell(row=1, column=5, value="Total Sales Qty")
+
+        ws.merge_cells("A1:A2")
+        ws.merge_cells("B1:B2")
+        ws.merge_cells("C1:C2")
+        ws.merge_cells("D1:D2")
+        ws.merge_cells("E1:E2")
+
+        current_col = 6  # Dimulai dari kolom F
+        loc_col_start = {}
+
+        for loc in present_locations:
+            loc_col_start[loc] = current_col
+            ws.cell(row=1, column=current_col, value=loc)
+            ws.merge_cells(
+                start_row=1,
+                start_column=current_col,
+                end_row=1,
+                end_column=current_col + 1,
+            )
+
+            ws.cell(row=2, column=current_col, value="Sales Rp")
+            ws.cell(row=2, column=current_col + 1, value="Sales Qty")
+            current_col += 2
+
+        max_col = current_col - 1
+
+        # Apply Style Header (Row 1 & Row 2) dengan Wrap Text
+        for r in range(1, 3):
+            for c in range(1, max_col + 1):
+                cell = ws.cell(row=r, column=c)
+                cell.font = font_header
+                cell.fill = fill_header
+                cell.alignment = align_header
+                cell.border = border_cell
+
+        # --- Populate Data Rows ---
+        indices = pt.index.tolist()
+        row_idx = 3
+
+        for idx in indices:
+            toko, divisi, obral_norm = idx
+
+            ws.cell(row=row_idx, column=1, value=toko).alignment = align_left
+            ws.cell(row=row_idx, column=2, value=divisi).alignment = align_center
+            ws.cell(row=row_idx, column=3, value=obral_norm).alignment = (
+                align_center
+            )
+
+            # Formula Total Sales Rp (Kolom F ke kanan, kelipatan 2)
+            rp_cols = [get_column_letter(c) for c in range(6, max_col + 1, 2)]
+            sum_rp_formula = (
+                f"=SUM(" + ",".join([f"{col}{row_idx}" for col in rp_cols]) + ")"
+            )
+            ws.cell(row=row_idx, column=4, value=sum_rp_formula).number_format = (
+                "#,##0"
+            )
+            ws.cell(row=row_idx, column=4).alignment = align_right
+            ws.cell(row=row_idx, column=4).font = font_bold
+
+            # Formula Total Sales Qty (Kolom G ke kanan, kelipatan 2)
+            qty_cols = [get_column_letter(c) for c in range(7, max_col + 1, 2)]
+            sum_qty_formula = (
+                f"=SUM(" + ",".join([f"{col}{row_idx}" for col in qty_cols]) + ")"
+            )
+            ws.cell(row=row_idx, column=5, value=sum_qty_formula).number_format = (
+                "#,##0"
+            )
+            ws.cell(row=row_idx, column=5).alignment = align_right
+            ws.cell(row=row_idx, column=5).font = font_bold
+
+            # Isi Data per Lokasi
+            for loc in present_locations:
+                c_start = loc_col_start[loc]
+
+                sales_rp = (
+                    pt.loc[idx, ("Total_Rupiah", loc)]
+                    if ("Total_Rupiah", loc) in pt.columns
+                    else 0
+                )
+                sales_qty = (
+                    pt.loc[idx, ("Qty", loc)] if ("Qty", loc) in pt.columns else 0
+                )
+
+                c_rp = ws.cell(row=row_idx, column=c_start, value=sales_rp)
+                c_rp.number_format = "#,##0"
+                c_rp.alignment = align_right
+
+                c_qty = ws.cell(row=row_idx, column=c_start + 1, value=sales_qty)
+                c_qty.number_format = "#,##0"
+                c_qty.alignment = align_right
+
+            # Zebra striping
+            is_even = row_idx % 2 == 0
+            for c in range(1, max_col + 1):
+                cell = ws.cell(row=row_idx, column=c)
+                cell.font = (
+                    font_data
+                    if c > 5
+                    else (font_bold if c in [4, 5] else font_data)
+                )
+                if is_even:
+                    cell.fill = fill_zebra
+                cell.border = border_cell
+
+            row_idx += 1
+
+        # --- Baris Grand Total ---
+        ws.cell(row=row_idx, column=1, value="Grand Total").alignment = align_left
+        ws.cell(row=row_idx, column=1).font = font_bold
+        ws.merge_cells(
+            start_row=row_idx, start_column=1, end_row=row_idx, end_column=3
+        )
+
+        for c in range(4, max_col + 1):
+            col_letter = get_column_letter(c)
+            total_formula = f"=SUM({col_letter}3:{col_letter}{row_idx-1})"
+            cell = ws.cell(row=row_idx, column=c, value=total_formula)
+            cell.number_format = "#,##0"
+            cell.font = font_bold
+            cell.alignment = align_right
+
+        for c in range(1, max_col + 1):
+            cell = ws.cell(row=row_idx, column=c)
+            cell.fill = fill_total
+            cell.border = border_total
+
+        # --- Autofit Column Width Khusus berdasarkan ISI DATA (Row 3+) untuk Kolom A, B, C, D, E ---
+        for col in ws.columns:
+            col_idx = col[0].column
+            col_letter = get_column_letter(col_idx)
+            max_len = 0
+
+            if col_idx in [1, 2, 3, 4, 5]:
+                # HANYA hitung dari baris ke-3 sampai bawah (mengabaikan teks header row 1 & 2)
+                for cell in col[2:]:
+                    if cell.value is not None:
+                        val_str = str(cell.value)
+                        val_len = (
+                            14 if val_str.startswith("=") else len(val_str)
+                        )  # Estimasi panjang angka formula
+                        if val_len > max_len:
+                            max_len = val_len
+                ws.column_dimensions[col_letter].width = max(max_len + 4, 11)
+            else:
+                # Kolom F ke kanan (Lokasi): Hitung seluruh isi termasuk header
+                for cell in col:
+                    if cell.value is not None:
+                        val_str = str(cell.value)
+                        val_len = 12 if val_str.startswith("=") else len(val_str)
+                        if val_len > max_len:
+                            max_len = val_len
+                ws.column_dimensions[col_letter].width = max(max_len + 0, 12)
+
+        # Freeze Panes disesuaikan ke 'F3'
+        ws.freeze_panes = "F3"
+
+        # Simpan ke file per bulan
+        filename = fr"/opt/share/For MKT ADMIN/Laporan Penjualan By Table/Laporan Penjualan By Table {bulan} {tahun} {namabulan}.xlsx"
+        wb.save(filename)
+        print(f"File tersimpan: {filename}")
+            # df_sum_sum=df_sum_sum[[]]
+def get_stock_transit():
+    df_ots_=df__otsdmdo_rt()
+    df_rtr=df__ots_retur_gd()
+    df_rtr=df_rtr.loc[~df_rtr['fv_artsizecode'].isnull()]
+    df_combined = pd.concat([df_ots_[['fv_artsizecode', 'fn_qty']], 
+                         df_rtr[['fv_artsizecode', 'fn_qty']]], 
+                        ignore_index=True)
+    # 2. Groupby berdasarkan fv_artsizecode dan jumlahkan fn_qty
+    df_result = df_combined.groupby('fv_artsizecode', as_index=False)['fn_qty'].sum()
+    # list_art=list_to_sql_in(df_result,'fv_artsizecode')
+    # df_art = df_artikel_pb_('fv_artsizecode, fv_barcode', where=f'and fv_artsizecode in ({list_art})')
+    # df_result=df_result.merge(df_art,how='left',on='fv_artsizecode')
+    # df_result=df_result.groupby('fv_barcode', as_index=False)['fn_qty'].sum()
+    df_result=df_result.rename(columns={
+                                "fn_qty":"Stock Transit",
+                                "fv_barcode":"artikel"})
+    return df_result

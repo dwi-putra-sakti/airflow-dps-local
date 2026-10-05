@@ -26,9 +26,13 @@ DB_PORT = os.getenv("DB_PORT")
 DB_SYNC = os.getenv("DB_SYNC")
 DB_LOCAL = os.getenv("DB_LOCAL") 
 DB_RT= os.getenv("DB_RT")
-print(DB_HOST1)
+
 @contextmanager
 def get_engine(stat):
+    # print("DB_TYPE:", DB_TYPE)
+    # print("DB_HOST1:", DB_HOST1)
+    # print("DB_HOST2:", DB_HOST2)
+    # print("DB_HOST3:", DB_HOST3)
     """Context manager untuk membuka dan menutup SQLAlchemy engine."""
     if stat == 'read':
         engine = create_engine(f'{DB_TYPE}://{DB_USER}:{DB_PASSWORD}@{DB_HOST1}:{DB_PORT}/{DB_SYNC}')
