@@ -16,6 +16,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 import traceback
 import os
+import re
 
 def clean_and_transform_data(df):
     """Melakukan pembersihan dan transformasi data."""
@@ -358,6 +359,7 @@ import pandas as pd
 import os
 
 def get_stock_data(base_path, start_year, end_year):
+    base_path = convert_to_local_path(base_path)
     stock_files = generate_stock_files(base_path, start_year, end_year)
     print("Daftar file yang dicek:", stock_files)
     
@@ -436,7 +438,22 @@ def merge_and_calculate(sales_data, stock_data, start_year, end_year):
     # Pilih kolom stok terakhir (sesuai urutan bulan)
     if available_stock_cols:
         def extract_month(col):
-            return datetime.strptime(col.replace('stock ', ''), '%b_%y')
+            raw = col.replace('stock ', '').strip()
+            # Dukung format stok akhir tahun 'at_xx' atau 'at xx' (misal: 'at_26' -> 31 Des)
+            if raw.startswith('at_') or raw.startswith('at '):
+                year_str = raw[3:].strip()
+                try:
+                    year = int('20' + year_str if len(year_str) == 2 else year_str)
+                    return datetime(year, 12, 31, 23, 59, 59)
+                except ValueError:
+                    return datetime.max
+            try:
+                return datetime.strptime(raw, '%b_%y')
+            except ValueError:
+                try:
+                    return datetime.strptime(raw, '%b %y')
+                except ValueError:
+                    return datetime.min
 
         last_stock_col = max(
             available_stock_cols,
@@ -466,6 +483,7 @@ def merge_and_calculate(sales_data, stock_data, start_year, end_year):
 
     # Merge data retur dengan data utama
     combined_data = pd.merge(combined_data, df_retur, on=['fn_whconsiid', 'fv_artsizecode'], how='left')
+    combined_data['qty'] = combined_data['qty'].fillna(0)
 
     # Bersihkan data (hapus baris jika semua kolom = 0)
     combined_data['min'] = combined_data[stock_cols + ['total_stock']+['qty']].min(axis=1)
@@ -493,6 +511,8 @@ def merge_detail(final_data, stock_data, start_year, end_year):
 
     for year in range(start_year, end_year + 1):
         last_month = current_month if year == current_year else 12  # Sampai bulan saat ini di tahun berjalan
+        stock_at_col = f"stock at_{str(year)[-2:]}"
+        has_stock_at = stock_at_col in stock_data.columns
 
         for month in range(1, last_month + 1):
             month_str = f"{month_names[month-1]}_{str(year)[-2:]}"  # Format jan_25, feb_25, dst.
@@ -500,12 +520,8 @@ def merge_detail(final_data, stock_data, start_year, end_year):
             
             stock_col = f'stock {month_str}'
 
-            # Hanya menyimpan stock bulan terakhir
-            if month == last_month:
-                lasast_stock_col = stock_col
-                columns.append(stock_col)
-                rename_columns[stock_col] = 'fn_stock_at'
-            else:
+            if has_stock_at:
+                # Jika ada stock_at (bulan 13), seluruh bulan 1 s.d. last_month adalah kolom bulanan
                 total_stock_col = f'total_stock_{month_str}'
                 qty_col = f'qty_{month_str}'
                 
@@ -515,9 +531,23 @@ def merge_detail(final_data, stock_data, start_year, end_year):
                     stock_col: f'fn_stock_{col_prefix}',
                     total_stock_col: f'fn_ts_{col_prefix}'
                 })
+            else:
+                # Hanya menyimpan stock bulan terakhir jika tidak ada stock_at
+                if month == last_month:
+                    columns.append(stock_col)
+                    rename_columns[stock_col] = 'fn_stock_at'
+                else:
+                    total_stock_col = f'total_stock_{month_str}'
+                    qty_col = f'qty_{month_str}'
+                    
+                    columns.extend([stock_col, total_stock_col, qty_col])
+                    rename_columns.update({
+                        qty_col: f'fn_qty_{col_prefix}',
+                        stock_col: f'fn_stock_{col_prefix}',
+                        total_stock_col: f'fn_ts_{col_prefix}'
+                    })
             
             if month == 12:
-                columns[:-1]
                 available_stock_cols = [col for col in stock_data.columns if col.startswith('stock ')]
 
                 # Pilih kolom stok terakhir (sesuai urutan bulan)
@@ -528,14 +558,18 @@ def merge_detail(final_data, stock_data, start_year, end_year):
                 
                 total_stock_dec = f'total_stock_dec_{str(year)[-2:]}'
                 qty_dec = f'qty_dec_{str(year)[-2:]}'
-                stock_dec=f'stock dec_{str(year)[-2:]}'
-                columns.extend([total_stock_dec, qty_dec,last_stock_col])
+                stock_dec = f'stock dec_{str(year)[-2:]}'
+                columns.extend([total_stock_dec, qty_dec, last_stock_col])
                 rename_columns.update({
-                    stock_dec:'fn_stock_12',
+                    stock_dec: 'fn_stock_12',
                     total_stock_dec: 'fn_ts_12',
                     qty_dec: 'fn_qty_12',
-                    last_stock_col:'fn_stock_at'
+                    last_stock_col: 'fn_stock_at'
                 })
+
+        if has_stock_at and stock_at_col not in columns:
+            columns.append(stock_at_col)
+            rename_columns[stock_at_col] = 'fn_stock_at'
     # additional condition
     columns.extend([])
     columns.extend(['qty', 'total_stock', 'total_qty'])
@@ -1087,21 +1121,50 @@ def generate_stock_files_parquet(base_path, start_year, end_year, months=None):
             stock_files.append(file_path)
 
     return stock_files
+
+def convert_to_local_path(path: str) -> str:
+    """
+    Konversi path acuan Airflow (/opt/share/...) ke Windows Network Share
+    (\\\\192.168.1.254\\Share\\_From Valdi\\...) saat berjalan di lingkungan Windows lokal.
+    """
+    if not path:
+        return path
+    if os.name == 'nt':
+        norm = str(path).replace('\\\\', '/').replace('\\', '/')
+        converted = None
+        if norm.startswith('/opt/share'):
+            rel = norm[len('/opt/share'):].strip('/')
+            rel_win = rel.replace('/', '\\')
+            converted = r'\\192.168.1.254\Share\_From Valdi' + ('\\' + rel_win if rel_win else '')
+        elif norm.lower().startswith('c:/opt/share'):
+            rel = norm[len('c:/opt/share'):].strip('/')
+            rel_win = rel.replace('/', '\\')
+            converted = r'\\192.168.1.254\Share\_From Valdi' + ('\\' + rel_win if rel_win else '')
+
+        if converted and converted != path:
+            print(f"🔄 [AUTO-CONVERT] Path dialihkan ke Windows Share: {converted}")
+            return converted
+    return path
+
 def get_stock_data_parquet(parquet_base, start_year, end_year, months=None):
     """
+    Membaca dan menggabungkan data stock bulanan dari parquet secara teroptimasi.
     months: None | int | list[int]
     """
+    import pyarrow.parquet as pq
+    parquet_base = convert_to_local_path(parquet_base)
     all_data = []
 
-    # normalisasi bulan
+    # normalisasi bulan (mendukung 1 s.d. 13 untuk kebutuhan stock akhir tahun / Power BI)
     if months is None:
         month_list = range(1, 14)
     elif isinstance(months, int):
         month_list = [months]
     else:
-        month_list = months
+        month_list = [m for m in months if 1 <= m <= 13]
 
     for year in range(start_year, end_year + 1):
+        year_suffix = str(year)[-2:]
         for month in month_list:
             parquet_path = os.path.join(
                 parquet_base,
@@ -1112,7 +1175,28 @@ def get_stock_data_parquet(parquet_base, start_year, end_year, months=None):
 
             if os.path.exists(parquet_path):
                 print(f"✅ Membaca parquet: {parquet_path}")
-                df = pd.read_parquet(parquet_path)
+                # Column projection: baca schema lebih dulu agar hanya kolom relevan yang dimuat ke RAM
+                schema = pq.read_schema(parquet_path)
+                stock_cols = [name for name in schema.names if name.startswith("stock ")]
+                cols_to_read = ['fn_whconsiid', 'fv_artsizecode'] + stock_cols
+
+                df = pd.read_parquet(parquet_path, columns=cols_to_read)
+                
+                # Optimasi tipe data untuk menghemat memori & mempercepat groupby
+                df['fn_whconsiid'] = df['fn_whconsiid'].astype('int32')
+                for sc in stock_cols:
+                    df[sc] = df[sc].astype('float32')
+
+                # Logika aman untuk bulan 13 (Saldo Akhir Tahun / Stock At):
+                # Apapun nama kolom stok di bulan 13 (misal 'stock jan_26', 'stock jan_27', dll),
+                # rename menjadi 'stock at_{year_suffix}' agar tidak bertabrakan dengan bulan lain.
+                if month == 13:
+                    stock_at_name = f"stock at_{year_suffix}"
+                    rename_m13 = {sc: stock_at_name for sc in stock_cols if sc != stock_at_name}
+                    if rename_m13:
+                        df = df.rename(columns=rename_m13)
+                        print(f"  [INFO] Kolom bulan 13 {list(rename_m13.keys())} di-mapping ke {list(rename_m13.values())} (Stock Akhir Tahun).")
+
                 all_data.append(df)
             else:
                 print(f"❌ Parquet tidak ditemukan: {parquet_path}")
@@ -1127,11 +1211,10 @@ def get_stock_data_parquet(parquet_base, start_year, end_year, months=None):
     # pastikan kolom ada
     required_cols = {'fn_whconsiid', 'fv_artsizecode'}
     if required_cols.issubset(combined_data.columns):
-        # num_cols = combined_data.select_dtypes(include='number').columns
         combined_data = (
             combined_data
             .groupby(['fn_whconsiid', 'fv_artsizecode'], as_index=False)
-            .sum()
+            .sum(numeric_only=True)
         )
         print("Setelah groupby:", combined_data.shape)
     else:
@@ -1146,7 +1229,60 @@ def get_nodo_tglreceive(import_sql: str,year):
 
     base_path = r'/opt/share'
     found_file = None
-    # print('test')
+
+    # Mapping bulan bahasa Indonesia ke bahasa Inggris (3 huruf & variasi)
+    month_map = {
+        'jan': 'Jan', 'januari': 'Jan', 'january': 'Jan',
+        'feb': 'Feb', 'februari': 'Feb', 'pebruari': 'Feb', 'february': 'Feb',
+        'mar': 'Mar', 'maret': 'Mar', 'march': 'Mar',
+        'apr': 'Apr', 'april': 'Apr',
+        'mei': 'May', 'may': 'May',
+        'jun': 'Jun', 'juni': 'Jun', 'june': 'Jun',
+        'jul': 'Jul', 'juli': 'Jul', 'july': 'Jul',
+        'agu': 'Aug', 'agt': 'Aug', 'agustus': 'Aug', 'aug': 'Aug', 'august': 'Aug',
+        'sep': 'Sep', 'september': 'Sep',
+        'okt': 'Oct', 'oktober': 'Oct', 'oct': 'Oct', 'october': 'Oct',
+        'nop': 'Nov', 'nopember': 'Nov', 'nov': 'Nov', 'november': 'Nov',
+        'des': 'Dec', 'desember': 'Dec', 'dec': 'Dec', 'december': 'Dec'
+    }
+
+    def clean_tracking_filename(filename: str) -> str:
+        """
+        Membersihkan format tanggal di nama file, contoh:
+        (5-okt-2026)  -> (05-Oct-2026)
+        (05-Okt-2026) -> (05-Oct-2026)
+        (1-Sep-2026)  -> (01-Sep-2026)
+        (31-Agu-2026) -> (31-Aug-2026)
+        """
+        pattern = r'\(\s*(\d{1,2})\s*[-/\s]\s*([a-zA-Z]+)\s*[-/\s]\s*(\d{4})\s*\)'
+        match = re.search(pattern, filename)
+        if not match:
+            return filename
+        day_str, month_str, year_str = match.groups()
+        month_clean = month_map.get(month_str.lower(), month_str.capitalize()[:3])
+        day_clean = f"{int(day_str):02d}"
+        clean_date_bracket = f"({day_clean}-{month_clean}-{year_str})"
+        return filename[:match.start()] + clean_date_bracket + filename[match.end():]
+
+    # ==========================================================
+    # Cleaning & Rename File jika format tanggal belum standar
+    # ==========================================================
+    if os.path.exists(base_path):
+        for fname in os.listdir(base_path):
+            if fname.startswith(f"TRACKING RESI {year}") and fname.endswith(".xlsx"):
+                clean_name = clean_tracking_filename(fname)
+                if clean_name != fname:
+                    old_path = os.path.join(base_path, fname)
+                    new_path = os.path.join(base_path, clean_name)
+                    try:
+                        if not os.path.exists(new_path):
+                            os.rename(old_path, new_path)
+                            print(f"File berhasil di-rename (clean): {fname} -> {clean_name}")
+                        else:
+                            print(f"File standar sudah ada ({clean_name}), menggunakan file tersebut.")
+                    except Exception as e:
+                        print(f"Peringatan: Gagal rename {fname} menjadi {clean_name}: {e}")
+
     # =========================
     # Cari file (mundur 7 hari)
     # =========================
@@ -1157,6 +1293,20 @@ def get_nodo_tglreceive(import_sql: str,year):
             found_file = candidate
             print(f"File ditemukan: {candidate}")
             break
+
+    # Fallback jika file belum/tidak bisa di-rename tapi cocok setelah dinormalisasi
+    if not found_file and os.path.exists(base_path):
+        for i in range(7):
+            check_date = (datetime.today() - timedelta(days=i)).strftime("%d-%b-%Y")
+            target_name = f"TRACKING RESI {year} ({check_date}).xlsx"
+            for fname in os.listdir(base_path):
+                if fname.startswith(f"TRACKING RESI {year}") and fname.endswith(".xlsx"):
+                    if clean_tracking_filename(fname) == target_name:
+                        found_file = os.path.join(base_path, fname)
+                        print(f"File ditemukan (via normalisasi): {found_file}")
+                        break
+            if found_file:
+                break
 
     if not found_file:
         return (
@@ -1208,6 +1358,18 @@ def get_nodo_tglreceive(import_sql: str,year):
     # =========================
     df_final = pd.concat([df_doa, df_combi], ignore_index=True)
 
+    def clean_indo_date(val):
+        if pd.isna(val) or isinstance(val, (datetime, pd.Timestamp)):
+            return val
+        s = str(val).strip()
+        m = re.match(r'^(\d{1,2})[-/\s]([a-zA-Z]+)[-/\s](\d{4})$', s)
+        if m:
+            d, mon, y = m.groups()
+            mon_en = month_map.get(mon.lower(), mon.capitalize()[:3])
+            return f"{int(d):02d}-{mon_en}-{y}"
+        return val
+
+    df_final['Date of Receipt'] = df_final['Date of Receipt'].apply(clean_indo_date)
     df_final['Date of Receipt'] = pd.to_datetime(
         df_final['Date of Receipt'],
         errors='coerce'

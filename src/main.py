@@ -21,7 +21,7 @@ from modules.queries import (df__penju, df__tokoawal, df__transaction, df__cus, 
                              df__otsdm, df__otsdo,df__pb_penjualan_,df__customers_pb_, df_artikel_pb_, 
                              df__otsob,df__aging,df__otsdo_rt,df__aging_pb_,df__aging_gudang_pb,
                              df__penju_today, df__artikel_status, df__tglso_, df__tglsa_, df__whtype_name, 
-                             df__aging_gudang , df__fstock_wh,df__stockbz_post,df__stockbz_now,
+                             df__aging_gudang , df__fstock_wh,df__stockbz_post,df__stockbz_now,df__onbook_stock,
                              df__penju_bz,df__transaction_bz,df_tglsosa_bz, df__tracking_rm, df__tracking_do,
                              df__date_arrival,df__detail_tracking,df__draft_pending, df__sales_pmse) 
 from modules.proses import (save_to_sql, add_index_and_foreign_keys, clean_and_transform_data, 
@@ -451,82 +451,82 @@ def get_last_three_months_including_current(typefile='excel'):
 
     return last_dates
 
-def stock_and_sales(start_year, end_year,typefile='excel'):
+def stock_and_sales(start_year, end_year, typefile='parquet'):
+    import time
+    t_start = time.time()
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     print("\n[INFO] Script stock_and_sales mulai dijalankan.")
-    print(f"[INFO] Timestamp: {timestamp}\n")
-    base_path = '/opt/share/PB DB/'
-    print("Base path:", base_path)
-    print(os.path.exists(base_path)) 
-    parquet_base = r'/opt/share/PB DB/stock'
-    print(typefile)
-    if typefile=='parquet':
-        stock_data_25 = get_stock_data_parquet(
-            parquet_base,start_year, end_year
-        )
+    print(f"[INFO] Timestamp: {timestamp}")
+    print(f"[INFO] Periode: {start_year} - {end_year} | Tipe File: {typefile}\n")
+
+    # Deteksi path otomatis (Linux Docker vs Windows UNC Share)
+    if os.name == 'nt':
+        base_path = r'\\192.168.1.254\Share\_From Valdi\PB DB'
+        parquet_base = r'\\192.168.1.254\Share\_From Valdi\PB DB\stock'
     else:
-        stock_data_25 = get_stock_data(base_path, start_year, end_year)
-    print(stock_data_25.info())
-    print("stock_data prosess complite")
-    print(stock_data_25.info())
+        base_path = '/opt/share/PB DB/'
+        parquet_base = '/opt/share/PB DB/stock'
 
-    sales_data_25 = get_monthly_sales_data(start_year, end_year)
-    print(sales_data_25.columns)
-    print("Sales_data prosess complite")
-    print(sales_data_25.info())
+    print(f"[PATH] Base path: {base_path} (exists: {os.path.exists(base_path)})")
+    print(f"[PATH] Parquet base: {parquet_base} (exists: {os.path.exists(parquet_base)})")
 
-    # Menggabungkan dan menghitung
-    final_data_25 = merge_and_calculate(sales_data_25, stock_data_25, start_year, end_year)
-    print("final_data prosess complite")
-    print(final_data_25.info())
+    # 1. Load Data Stock
+    t0 = time.time()
+    if typefile == 'parquet':
+        stock_data = get_stock_data_parquet(parquet_base, start_year, end_year)
+    else:
+        stock_data = get_stock_data(base_path, start_year, end_year)
+    print(f"[1/5] Load stock data selesai ({stock_data.shape[0]:,} baris) dalam {time.time() - t0:.2f} detik")
 
-    finale_25 = merge_detail(final_data_25, stock_data_25, start_year, end_year )
-    tanggal_selesai = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
-    print(f"finale prosess complite {tanggal_selesai}")
-    print(finale_25.info())
-    finale_25 = finale_25.loc[:, ~finale_25.columns.duplicated()]
-    
-    finale_25=ensure_stock_columns(finale_25)
-    finale_25 = finale_25.drop(
-    columns=[c for c in finale_25.columns if c.lower().startswith('ts_ ')],
-    errors='ignore'
-)
-    nama_tabel=f'sales_thru_pb_{str(start_year)[-2:]}'
-    # finale_25.to_sql(nama_tabel, engine, if_exists='replace', index=False, dtype=sql_types)
-    
-    save_to_sql(finale_25, nama_tabel, 'imp')
-    add_index_and_foreign_keys(
-    'imp',
-    nama_tabel,
-    index_cols=["fn_whconsiid", "fv_artsizecode"],
-    foreign_keys=[
-        {
-            "column": "fn_whconsiid",
-            "ref_table": "customers_pb",
-            "ref_column": "fn_whconsiid",
-            "constraint_name": f"fk_whconsiid_pb_sales_thru_{start_year}"
-        },
-        {
-            "column": "fv_artsizecode",
-            "ref_table": "artikel_pb",
-            "ref_column": "fv_artsizecode",
-            "constraint_name": f"fk_artsize_pb_sales_thru_{start_year}"
-        }
-    ]
+    # 2. Load Data Sales
+    t0 = time.time()
+    sales_data = get_monthly_sales_data(start_year, end_year)
+    print(f"[2/5] Load sales data selesai ({sales_data.shape[0]:,} baris) dalam {time.time() - t0:.2f} detik")
+
+    # 3. Menggabungkan dan Menghitung (Merge & Calculate)
+    t0 = time.time()
+    final_data = merge_and_calculate(sales_data, stock_data, start_year, end_year)
+    print(f"[3/5] Merge & Calculate selesai ({final_data.shape[0]:,} baris) dalam {time.time() - t0:.2f} detik")
+
+    # 4. Merge Detail & Penataan Kolom
+    t0 = time.time()
+    finale = merge_detail(final_data, stock_data, start_year, end_year)
+    finale = finale.loc[:, ~finale.columns.duplicated()]
+    finale = ensure_stock_columns(finale)
+    finale = finale.drop(
+        columns=[c for c in finale.columns if c.lower().startswith('ts_ ')],
+        errors='ignore'
     )
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    print("\n[INFO] Script telah di input di gis.local.")
-    print(f"[INFO] Timestamp: {timestamp}")
-        # Mendapatkan tanggal saat ini
+    print(f"[4/5] Merge Detail selesai ({finale.shape[0]:,} baris) dalam {time.time() - t0:.2f} detik")
 
-    # save_to_sql(finale_25, nama_tabel, 'read')
-    # add_index_and_foreign_keys(nama_tabel, ['fn_whconsiid', 'fv_artsizecode'])
-    
-    tanggal_selesai = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
-        # Menambahkan pesan status berhasil
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    print("\n[INFO] Script telah berhasil dijalankan.")
-    print(f"[INFO] Timestamp: {timestamp}")
+    # 5. Simpan ke Database & Buat Index
+    t0 = time.time()
+    nama_tabel = f'sales_thru_pb_{str(start_year)[-2:]}'
+    save_to_sql(finale, nama_tabel, 'imp')
+    add_index_and_foreign_keys(
+        'imp',
+        nama_tabel,
+        index_cols=["fn_whconsiid", "fv_artsizecode"],
+        foreign_keys=[
+            {
+                "column": "fn_whconsiid",
+                "ref_table": "customers_pb",
+                "ref_column": "fn_whconsiid",
+                "constraint_name": f"fk_whconsiid_pb_sales_thru_{start_year}"
+            },
+            {
+                "column": "fv_artsizecode",
+                "ref_table": "artikel_pb",
+                "ref_column": "fv_artsizecode",
+                "constraint_name": f"fk_artsize_pb_sales_thru_{start_year}"
+            }
+        ]
+    )
+    print(f"[5/5] Save to SQL & Indexing selesai dalam {time.time() - t0:.2f} detik")
+
+    total_elapsed = time.time() - t_start
+    timestamp_end = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    print(f"\n[INFO] Script stock_and_sales berhasil diselesaikan pada {timestamp_end} (Total waktu: {total_elapsed:.2f} detik).")
 def md_status_artikel():
     df_artsq = df__artsizecode(col='fv_artsizecode, fv_barcode, fv_sizename, fv_configname', stat='imp')
     df = df__sales_thru_26('fv_artsizecode,fn_whconsiid,fn_stock_at') 
@@ -1124,7 +1124,8 @@ def fstok_gudang():
     if df_fstock_wh.empty: 
         df_fstock_wh=pd.DataFrame(columns=['fv_whtypename','fn_qty','fv_artsizecode'])
     
-    df_combi=pd.concat([df_stock_wh, df_fstock_wh], ignore_index=True)
+    df_onbook=df__onbook_stock()
+    df_combi=pd.concat([df_stock_wh, df_fstock_wh,df_onbook], ignore_index=True)
     df_combi['fn_qty'] = df_combi['fn_qty'].astype(float)
     # artsize = df_combi['fv_artsizecode'].tolist()
     # # ubah list size jadi format SQL

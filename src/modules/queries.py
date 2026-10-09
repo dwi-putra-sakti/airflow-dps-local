@@ -1759,7 +1759,62 @@ def df__fstock_wh():# ambil list barcode unik dari df
     with get_engine('write') as engine:  # Menggunakan context manager dengan with
         df = pd.read_sql(query, engine)
     return df
+def df__onbook_stock(df=None, 
+                     type_show='all',
+                     subid=False, 
+                     fn_nodraf=False, 
+                     fn_whconsiid=False,
+                     list_from=None, set_minus=True):
+    
+    # type_show='all'
+    # set_minus=True
+    if type_show == 'all': whid = ''
+    elif type_show == 'pst': whid = 'and fn_whconsiid in (0)'
+    elif type_show == 'konsi': whid = 'and fn_whconsiid in (9999)'
+    else: whid = 'and fn_whconsiid in (0,9999)'
 
+
+    # 2. Setup SELECT dan GROUP BY secara dinamis untuk mencegah error agregasi
+    select_cols = ['fn_whconsiid as fv_whtypename', 'fv_artsizecode']
+    group_cols = ['fn_whconsiid', 'fv_artsizecode']
+
+    whconsi_list = '' 
+    qty_calc = 'sum(fn_on_book * -1)' if set_minus else 'sum(fn_on_book)'
+    select_cols.append(f'{qty_calc} as fn_qty')
+
+    select_clause = ", ".join(select_cols)
+    group_clause = ", ".join(group_cols)
+
+    # 3. Filter dokumen disatukan dalam satu variabel agar selalu konsisten
+    doc_filter = 'and (fv_nodraft like "BK%%" or fv_nodraft like "OB%%")'
+
+    # 4. Logic penentuan list_artsize
+    list_artsize_str = ""
+
+    # 5. Final Query - Menggunakan doc_filter dan group_clause yang sudah diperbaiki
+    query = f'''
+        SELECT {select_clause}
+        FROM gis_local.t_draftdtl
+        WHERE fc_status='X' {doc_filter} {list_artsize_str} {whid} {whconsi_list}
+        GROUP BY {group_clause}
+    '''
+    with get_engine('imp') as engine:
+        df_final = pd.read_sql(query, engine)
+
+    # if df_final.empty:
+    #     df_final
+    # else:
+    #     df_final['fv_whtypename'] = np.where(
+    #                         df_final['fv_whtypename'] == 0, 'PUSAT',
+    #                         np.where(df_final['fv_whtypename'] == 9999, 'KONSINETTO', df_final['fv_whtypename']))
+    
+    if df_final.empty:
+        return df_final
+        
+    df_final['fv_whtypename'] = np.where(
+                        df_final['fv_whtypename'] == 0, 'PUSAT',
+                        np.where(df_final['fv_whtypename'] == 9999, 'KONSINETTO', df_final['fv_whtypename']))
+    return df_final
 def df__aging_gudang_pb():
     query = f"""
             SELECT 
