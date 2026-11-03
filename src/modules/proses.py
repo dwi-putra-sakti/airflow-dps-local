@@ -25,7 +25,7 @@ def clean_and_transform_data(df):
     df['nama_bulan'] = df['tgltrx'].dt.strftime('%B')
     df['tahun'] = df['tgltrx'].dt.year
 
-    df['fv_artsizecode'] = df['fv_artsizecode'].str.upper()
+    df['fv_artsizecode'] = df['fv_artsizecode'].str.strip().str.upper()
     df['status_artikel'] = df['status_artikel'].fillna(df['event'])
 
     df['fv_artsizecode'] = df['fv_artsizecode'].replace({'BBRD103V042333-': 'BBRD103V042333'})
@@ -410,6 +410,9 @@ def test_get_stock_data():
 
 def merge_and_calculate(sales_data, stock_data, start_year, end_year):
     # Menggabungkan data penjualan dan stok
+    sales_data['fv_artsizecode'] = sales_data['fv_artsizecode'].astype(str).str.strip().str.upper()
+    stock_data['fv_artsizecode'] = stock_data['fv_artsizecode'].astype(str).str.strip().str.upper()
+
     combined_data = pd.merge(stock_data, sales_data, on=['fn_whconsiid', 'fv_artsizecode'], how='outer').fillna(0)
     # combined_data=combined_data.drop(columns='tgltrx')
     # Generate nama kolom stok dan qty berdasarkan tahun

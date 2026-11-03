@@ -31,7 +31,8 @@ from modules.proses import (save_to_sql, add_index_and_foreign_keys, clean_and_t
                             get_artikel_md, get_new_or_changed_rows,upsert_data, process_data_cus,delete_rows,
                             sls_disctok, proc_pivot_table_n, add_ornal,ensure_stock_columns,
                             get_penjualan_tabel,get_stock_transit,
-                            proc_add_aging,proc_pivot_table,get_stock_data_parquet,get_nodo_tglreceive)
+                            proc_add_aging,proc_pivot_table,get_stock_data_parquet,get_nodo_tglreceive,
+                            convert_to_local_path)
 
 def margin_tb(year):
     df_trx, df_artimp, df_artred, df_atrxu, df_mrgincat, df_mrgin = fetch_data_margin(year)
@@ -620,15 +621,12 @@ def md_artikel_size():
 
 def md_artikel_size_26():
     # 1. Ambil data pendukung
-    count=0
-    print(count+1)
     df_cus = df__cus()
     df_artsq = df__artsizecode(col='fv_artsizecode, fv_barcode, fv_sizename, fv_configname', stat='imp')
 
     # OPTIMASI 1: Sangat disarankan ganti '*' dengan kolom yang benar-benar dipakai di SQL query level
     df_sq25 = df__sales_thru_26('*') 
     
-    print(count+1)
     # 2. Downcast ke 'category' untuk hemat memori saat Join
     cat_cols = ['fv_artsizecode', 'fn_whconsiid']
     for col in cat_cols:
@@ -639,13 +637,11 @@ def md_artikel_size_26():
         if col in df_artsq.columns:
             df_artsq[col] = df_artsq[col].astype('category')
     
-    print(count+1)
     # 3. Merge Dataframe
     df_sq25 = pd.merge(df_sq25, df_artsq, on='fv_artsizecode', how='left', copy=False)
     del df_artsq
     gc.collect()
     
-    print(count+1)
     df_sq25 = pd.merge(df_sq25, df_cus, on='fn_whconsiid', how='left', copy=False)
     del df_cus
     gc.collect()
@@ -653,7 +649,6 @@ def md_artikel_size_26():
     if 'fn_artsizeid' in df_sq25.columns:
         df_sq25['fn_artsizeid'] = pd.to_numeric(df_sq25['fn_artsizeid'], downcast='integer')
     
-    print(count+1)
     # OPTIMASI 2: Buat pk_id tanpa astype(str) yang membebankan objek Python
     df_sq25['pk_id'] = (
         df_sq25['fn_whconsiid'].astype(str) + '/' + df_sq25['fn_artsizeid'].astype(str)
@@ -709,35 +704,223 @@ def md_artikel_size_26():
     df_sq25.rename(columns={'fv_configname': 'bot/top'}, inplace=True)
 
     # -------------------------------------------------------------------------
-    # OPTIMASI 5: Stream Writing ke Excel
+    # OPTIMASI 5: Stream Writing ke Excel (Data Utuh + RAM Tetap < 100 MB)
     # -------------------------------------------------------------------------
     total_rows = len(df_sq25)
     chunks = 3
     chunk_size = math.ceil(total_rows / chunks)
-
+    columns = list(df_sq25.columns)
     excel_path = '/opt/share/For MD/stock artikel all store 2026.xlsx'
     
-    print("Mulai menulis ke Excel...", flush=True)
-    with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
-        for i in range(chunks):
-            start_row = i * chunk_size
-            end_row = min(start_row + chunk_size, total_rows)
-            
-            # Slice dataframe per chunk
-            sheet_df = df_sq25.iloc[start_row:end_row]
-            
-            # Write ke sheet masing-masing
-            sheet_df.to_excel(writer, index=False, sheet_name=f'data_{i+1}')
-
+    print(f"Mulai menulis {total_rows:,} baris ke Excel ({excel_path}) dalam {chunks} sheets...", flush=True)
+    import xlsxwriter
+    workbook = xlsxwriter.Workbook(excel_path, {'constant_memory': True, 'nan_inf_to_errors': True})
+    for i in range(chunks):
+        start_row = i * chunk_size
+        end_row = min(start_row + chunk_size, total_rows)
+        chunk_df = df_sq25.iloc[start_row:end_row]
+        sheet_name = f'data_{i+1}'
+        print(f"  -> Menulis sheet '{sheet_name}' (baris {start_row:,} s/d {end_row:,})...", flush=True)
+        worksheet = workbook.add_worksheet(sheet_name)
+        # 1. Tulis Header
+        worksheet.write_row(0, 0, [str(c) for c in columns])
+        # 2. Tulis Data Baris per Baris secara Sekuensial
+        for r_idx, row in enumerate(chunk_df.itertuples(index=False, name=None), start=1):
+            cleaned_row = [None if (v is None or pd.isna(v)) else v for v in row]
+            worksheet.write_row(r_idx, 0, cleaned_row)
+        del chunk_df
+        gc.collect()
+    workbook.close()
     del df_sq25
     gc.collect()
-    print("Selesai diproses tanpa OOM!", flush=True)
+    print("✅ Selesai diproses ke Excel dengan aman tanpa OOM dan seluruh data terisi utuh!", flush=True)
     # df_result25=df_sq25.select_dtypes(include='number').sum()
     # # df_result24.to_excel('df_result24.xlsx')
     # df_result25.to_excel('/opt/share/PB DB/df_result25.xlsx')
 
 import pandas as pd
 from datetime import datetime
+
+
+def artikel_size_value_26():
+    """
+    Generate laporan MD Artikel Size 2026 dengan Sales Value bulanan:
+    - Tanpa kolom stok awal (hanya total stock dan qty per bulan).
+    - Menambahkan kolom value penjualan (val {bulan} 26) di sebelah qty jual setiap bulan.
+    - Menghitung total sales val 2026.
+    - Menggabungkan status artikel dari status_artikel.xlsx.
+    - Ekspor streaming sekuensial multi-sheet (3 sheets) menggunakan constant_memory:
+      stock artikel all store 2026 value.xlsx
+    """
+    import time
+    t_start = time.time()
+    print("[INFO] Memulai proses artikel_size_value_26...", flush=True)
+
+    # 1. Load Data Master & Sales Thru 2026
+    df_cus = df__cus()
+    df_artsq = df__artsizecode(col='fv_artsizecode, fv_barcode, fv_sizename, fv_configname', stat='imp')
+    df_sq = df__sales_thru_26('*')
+
+    # Downcast kategori untuk hemat memori saat join
+    for col in ['fv_artsizecode', 'fn_whconsiid']:
+        if col in df_sq.columns:
+            df_sq[col] = df_sq[col].astype('category')
+    for col in ['fv_artsizecode', 'fv_barcode', 'fv_sizename', 'fv_configname']:
+        if col in df_artsq.columns:
+            df_artsq[col] = df_artsq[col].astype('category')
+
+    df_sq = pd.merge(df_sq, df_artsq, on='fv_artsizecode', how='left', copy=False)
+    del df_artsq
+    gc.collect()
+
+    df_sq = pd.merge(df_sq, df_cus, on='fn_whconsiid', how='left', copy=False)
+    del df_cus
+    gc.collect()
+
+    if 'fn_artsizeid' in df_sq.columns:
+        df_sq['fn_artsizeid'] = pd.to_numeric(df_sq['fn_artsizeid'], downcast='integer')
+
+    df_sq['pk_id'] = (
+        df_sq['fn_whconsiid'].astype(str) + '/' + df_sq['fn_artsizeid'].astype(str)
+    ).astype('category')
+
+    if 'fn_cusid' in df_sq.columns:
+        df_sq.drop(columns=['fn_cusid'], inplace=True)
+
+    # 2. Monthly Sales Value dari gis_local.pb_penjualan_2026
+    print("[INFO] Mengambil data value penjualan dari gis_local.pb_penjualan_2026...", flush=True)
+    with get_engine('imp') as engine:
+        query_val = """
+        SELECT fn_whconsiid, fv_artsizecode, fn_month, 
+               SUM(fn_totalpenjualan) AS val_sales
+        FROM gis_local.pb_penjualan_2026
+        GROUP BY fn_whconsiid, fv_artsizecode, fn_month
+        """
+        df_val = pd.read_sql(query_val, engine)
+
+    months_abbr = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+    year_short = '26'
+    df_pivot_val = df_val.pivot(index=['fn_whconsiid', 'fv_artsizecode'], columns='fn_month', values='val_sales').fillna(0)
+    val_cols = [f'val {months_abbr[m-1]} {year_short}' for m in df_pivot_val.columns]
+    df_pivot_val.columns = val_cols
+    df_pivot_val = df_pivot_val.reset_index()
+    del df_val
+    gc.collect()
+
+    # 3. Merge Value & Status Artikel
+    df_sq['fv_artsizecode'] = df_sq['fv_artsizecode'].astype(str)
+    df_sq['fn_whconsiid'] = df_sq['fn_whconsiid'].astype('int64')
+    df_pivot_val['fv_artsizecode'] = df_pivot_val['fv_artsizecode'].astype(str)
+    df_pivot_val['fn_whconsiid'] = df_pivot_val['fn_whconsiid'].astype('int64')
+
+    df_sq = pd.merge(df_sq, df_pivot_val, on=['fn_whconsiid', 'fv_artsizecode'], how='left', copy=False)
+    del df_pivot_val
+    gc.collect()
+
+    for col in val_cols:
+        if col in df_sq.columns:
+            df_sq[col] = df_sq[col].fillna(0)
+    df_sq['total sales val 2026'] = df_sq[val_cols].sum(axis=1)
+
+    # Status artikel
+    try:
+        status_path = convert_to_local_path('/opt/share/For MD/status_artikel.xlsx')
+    except Exception:
+        status_path = '/opt/share/For MD/status_artikel.xlsx'
+
+    if not os.path.exists(status_path):
+        alt_status = convert_to_local_path('/opt/share/for MD/status_artikel.xlsx')
+        if os.path.exists(alt_status):
+            status_path = alt_status
+
+    if os.path.exists(status_path):
+        df_status = pd.read_excel(status_path)
+        df_status['status'] = df_status['status'].replace({"SEHAT": "OK"})
+        df_sq = pd.merge(df_sq, df_status, on=['fn_whconsiid', 'fv_barcode'], how='left', copy=False)
+        del df_status
+        gc.collect()
+    else:
+        print(f"⚠️ {status_path} tidak ditemukan, status di-set 'OK'", flush=True)
+        df_sq['status'] = 'OK'
+
+    # 4. Rename & Reorder Kolom (Hapus Stok Awal & Sisipkan Val di sebelah Qty)
+    df_sq = generate_rename_dict(2026, 2026, df_sq)
+
+    ordered_cols = ['pk_id', 'toko', 'code toko', 'artikel', 'size']
+    for m in months_abbr:
+        ts_col = f'total stock {m} {year_short}'
+        qty_col = f'qty {m} {year_short}'
+        val_col = f'val {m} {year_short}'
+        if ts_col in df_sq.columns:
+            ordered_cols.append(ts_col)
+        if qty_col in df_sq.columns:
+            ordered_cols.append(qty_col)
+        if val_col in df_sq.columns:
+            ordered_cols.append(val_col)
+
+    summary_cols = [
+        'stock akhir 2026', 
+        'qty retur 2026', 
+        'total stock 2026', 
+        'total sales qty 2026', 
+        'total sales val 2026'
+    ]
+    for sc in summary_cols:
+        if sc in df_sq.columns:
+            ordered_cols.append(sc)
+
+    if 'fv_configname' in df_sq.columns:
+        df_sq.rename(columns={'fv_configname': 'bot/top'}, inplace=True)
+    if 'bot/top' in df_sq.columns:
+        ordered_cols.append('bot/top')
+    if 'status' in df_sq.columns:
+        ordered_cols.append('status')
+
+    df_sq = df_sq[ordered_cols].dropna(subset=['artikel'])
+
+    # 5. Export ke Excel Streaming (Multi-Sheet Chunks)
+    try:
+        output_excel_path = convert_to_local_path('/opt/share/For MD/stock artikel all store 2026 value.xlsx')
+    except Exception:
+        output_excel_path = '/opt/share/For MD/stock artikel all store 2026 value.xlsx'
+
+    os.makedirs(os.path.dirname(output_excel_path), exist_ok=True)
+
+    chunks = 3
+    total_rows = len(df_sq)
+    chunk_size = math.ceil(total_rows / chunks)
+    columns = list(df_sq.columns)
+
+    print(f"[INFO] Mulai menulis {total_rows:,} baris ke Excel ({output_excel_path}) dalam {chunks} sheets...", flush=True)
+    import xlsxwriter
+    workbook = xlsxwriter.Workbook(output_excel_path, {'constant_memory': True, 'nan_inf_to_errors': True})
+
+    for i in range(chunks):
+        start_row = i * chunk_size
+        end_row = min(start_row + chunk_size, total_rows)
+        sheet_df = df_sq.iloc[start_row:end_row]
+        sheet_name = f'data_{i+1}'
+        print(f"  -> Menulis sheet '{sheet_name}' (baris {start_row:,} s/d {end_row:,})...", flush=True)
+
+        worksheet = workbook.add_worksheet(sheet_name)
+
+        # 1. Tulis Header
+        worksheet.write_row(0, 0, [str(c) for c in columns])
+
+        # 2. Tulis Data Baris demi Baris secara Sekuensial
+        for r_idx, row in enumerate(sheet_df.itertuples(index=False, name=None), start=1):
+            cleaned_row = [None if (v is None or pd.isna(v)) else v for v in row]
+            worksheet.write_row(r_idx, 0, cleaned_row)
+
+        del sheet_df
+        gc.collect()
+
+    workbook.close()
+    del df_sq
+    gc.collect()
+    print(f"✅ [INFO] Selesai artikel_size_value_26 dalam {time.time() - t_start:.2f} detik. File: {output_excel_path}", flush=True)
+    return df_sq
+
 
 def md_artikel_size2():
     # def md_artikel_size2():
@@ -837,6 +1020,26 @@ def md_artikel_size2():
     df2.to_excel('/opt/share/For MD/stock artikel all time.xlsx', index=False)
     df2r.to_excel('/opt/share/For MD/artsize_gd_result.xlsx')
     # df2[['artikel','status','status_toko']].drop_duplicates().to_excel('/opt/share/For MD/status_artikel.xlsx', index=False)
+
+    # Save artsize_gd_result ke Parquet per tanggal untuk tracking harian
+    try:
+        result_dir = convert_to_local_path('/opt/share/result')
+    except Exception:
+        result_dir = '/opt/share/result'
+    os.makedirs(result_dir, exist_ok=True)
+
+    tgl_str = datetime.now().strftime('%y%m%d')
+    df2r_df = df2r.reset_index()
+    df2r_df.columns = ['kolom', 'total']
+    df2r_df['tanggal'] = datetime.now().strftime('%Y-%m-%d')
+
+    file_parquet_daily = os.path.join(result_dir, f'artsize_gd_result-{tgl_str}.parquet')
+    file_parquet_latest = os.path.join(result_dir, 'artsize_gd_result.parquet')
+
+    df2r_df.to_parquet(file_parquet_daily, engine='pyarrow', index=False)
+    df2r_df.to_parquet(file_parquet_latest, engine='pyarrow', index=False)
+    print(f"✅ Parquet result saved: {file_parquet_daily}")
+
     return df2
 
 def stock_by_artikel():
@@ -1555,18 +1758,41 @@ def upsert_customers_pb():
     df=df.rename(columns={'MANAGER_y':'MANAGER'})
     df['SUPERVISOR']=df['SUPERVISOR/ OJT**']
 
-    df_picmic=pd.read_excel(mic_path,).dropna(how='all')
-    df=pd.merge(df,df_picmic[['PIC MIC','STORE GIS','SPG Konsinetto']],left_on='code',right_on='STORE GIS',how='left').fillna('-')
-    df_picmic=pd.read_excel(mic_path2,).dropna(how='all')
-    df=pd.merge(df,df_picmic[['kode_toko','pic']],left_on='code',right_on='kode_toko',how='left').fillna('-')
-    df['Alokator']=df['pic']
+        # 1. Baca PIC MIC
+    df_picmic = pd.read_excel(mic_path).dropna(how='all')
+    picmic_cols = [c for c in ['PIC MIC', 'STORE GIS'] if c in df_picmic.columns]
+    if 'STORE GIS' in picmic_cols:
+        df = pd.merge(df, df_picmic[picmic_cols], left_on='code', right_on='STORE GIS', how='left').fillna('-')
 
-    df.loc[df['fn_cusid']==915,'fn_whconsiid']= 9000
-    df=df.drop(columns=['KODE TOKO GIS', 'MANAGER_x', 'SUPERVISOR/ OJT**','STORE GIS','PIC MIC','pic','kode_toko'])
-    df.loc[df['fn_grpcusid']==9,'Neo Toko']= "Bazar"
-    df.loc[df['Toko'].str.startswith('RJ-FO'),'fc_codecus']=df['code']
-    df.loc[df['fc_codecus'].str.startswith('-'),'fc_codecus']=df['code']
-    df=df.rename(columns={'SPG Konsinetto':'fv_spg_kosninetto'})
+    # 2. Baca data toko Alokator (mic_path2)
+    df_alokator = pd.read_excel(mic_path2).dropna(how='all')
+    
+    # Normalisasi nama kolom: strip whitespace dan lowercase
+    df_alokator.columns = df_alokator.columns.astype(str).str.strip().str.lower()
+
+    # Mapping fleksibel jika nama kolom bervariasi
+    rename_map = {}
+    for col in df_alokator.columns:
+        if col in ['kode toko', 'kode_toko', 'kodetoko', 'store_code', 'kode']:
+            rename_map[col] = 'kode_toko'
+        elif col in ['pic', 'pic alokator', 'alokator', 'nama pic']:
+            rename_map[col] = 'pic'
+    df_alokator = df_alokator.rename(columns=rename_map)
+
+    # Merge jika kolom tersedia
+    if 'kode_toko' in df_alokator.columns and 'pic' in df_alokator.columns:
+        df = pd.merge(df, df_alokator[['kode_toko', 'pic']], left_on='code', right_on='kode_toko', how='left').fillna('-')
+        df['Alokator'] = df['pic']
+    else:
+        print(f"⚠️ Kolom 'kode_toko' / 'pic' tidak ditemukan di {mic_path2}. Kolom terbaca: {df_alokator.columns.tolist()}")
+        df['Alokator'] = '-'
+
+    df.loc[df['fn_cusid'] == 915, 'fn_whconsiid'] = 9000
+    
+    # Gunakan errors='ignore' agar tidak KeyError jika ada kolom yang tidak terdaftar
+    drop_cols = ['KODE TOKO GIS', 'MANAGER_x', 'SUPERVISOR/ OJT**', 'STORE GIS', 'PIC MIC', 'pic', 'kode_toko']
+    df = df.drop(columns=drop_cols, errors='ignore')
+
     if df is None or df.empty:
         print("❌ DataFrame kosong! Upsert dibatalkan.")
     else:

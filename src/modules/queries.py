@@ -323,11 +323,13 @@ def df__penju_bz(year):
     left join 
         (SELECT c.fv_artsizecode , e.fv_namemark from articlesize_tb c 
             left join article_tb d on c.fn_articleid=d.fn_articleid
-            left join markdown_tb e on d.fn_markid=e.fn_markid) z on b.fv_artsizecode=z.fv_artsizecode
+            left join markdown_tb e on d.fn_markid=e.fn_markid
+            GROUP BY c.fv_artsizecode) z on b.fv_artsizecode=z.fv_artsizecode
     WHERE 
         b.fc_status <> 'F' 
         and a.fc_status <> 'F' 
         and a.fd_tgljual BETWEEN '{year}-01-01 00:00:01' and '{year}-12-31 23:59:59'
+    
     '''
     with get_engine('write') as engine:  # Menggunakan context manager dengan with
         df = pd.read_sql(query, engine)
@@ -912,12 +914,12 @@ def get_monthly_sales_data(start_year, end_year):
         sales_data = []
         for month, period in months.items():
             start_date, end_date = period.split(" to ")
-            start_date = start_date + " 00:00:00"
-            end_date   = end_date + " 23:59:59"
+            # start_date = start_date + " 00:00:00"
+            # end_date   = end_date + " 23:59:59"
             query = '''
             SELECT 
                 a.fn_cusid AS fn_whconsiid,
-                UPPER(b.fv_artsizecode) AS fv_artsizecode, 
+                TRIM(UPPER(b.fv_artsizecode)) AS fv_artsizecode, 
                 IFNULL(SUM(b.fn_jualpersize), 0) AS qty_{month}
             FROM 
                 t_penjualanmst a
@@ -951,6 +953,7 @@ def get_monthly_sales_data(start_year, end_year):
             df = pd.read_sql_query(query, engine, params=(start_date, end_date,start_date, end_date))
             sales_data.append(df)
     combined_sales = pd.concat(sales_data, axis=0, ignore_index=True)
+    combined_sales['fv_artsizecode'] = combined_sales['fv_artsizecode'].astype(str).str.strip().str.upper()
     combined_sales = combined_sales.groupby(['fn_whconsiid', 'fv_artsizecode'], as_index=False).sum()
     return combined_sales
 
