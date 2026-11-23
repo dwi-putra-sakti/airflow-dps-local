@@ -158,7 +158,7 @@ def get_stock_monthly(tglEND,expot_excel):
     
     if expot_excel == 'yes':
         max_rows = 1048570
-        output_file = f'/opt/share/PB DB/pb_stock_{bulan}_{fdate}.xlsx'
+        output_file = convert_to_local_path(f'/opt/share/PB DB/pb_stock_{bulan}_{fdate}.xlsx')
         print(len(df_tok))
         print(max_rows)
         if len(df_tok) <= max_rows:
@@ -192,7 +192,7 @@ def merge_stock_by_date(tgl_input):
         print(f"[INFO] Memproses data untuk Tahun: {year_str}, Bulan: {month_str}")
 
         # 2. Definisi Path Input (Gunakan f-string untuk fleksibilitas)
-        base_input = "/opt/share/PB DB/stock"
+        base_input = convert_to_local_path("/opt/share/PB DB/stock")
         # base_input = r'\\192.168.1.254\Share\_From Valdi\PB DB\stock'
         path_dept = os.path.join(base_input, f"tahun={year_str}", f"bulan={month_str}", "stock_dept.parquet")
         path_bz = os.path.join(base_input, f"tahun={year_str}", f"bulan={month_str}", "stock_bz.parquet")
@@ -210,7 +210,7 @@ def merge_stock_by_date(tgl_input):
         df = pd.concat([df_dept, df_bz], ignore_index=True)
 
         # 5. Definisi Path Output
-        parquet_base_out = "/opt/share/PB DB/stock"
+        parquet_base_out = convert_to_local_path("/opt/share/PB DB/stock")
         output_path = os.path.join(parquet_base_out, f"tahun={year_str}", f"bulan={month_str}")
         
         os.makedirs(output_path, exist_ok=True)
@@ -322,7 +322,7 @@ def get_stock_monthly_parquet(tglEND,expot_excel):
     df_tok['bulan'] = month
     if expot_excel == 'yes':
         max_rows = 1048570
-        output_file = f'/opt/share/PB DB/pb_stock_{bulan}_{fdate}.xlsx'
+        output_file = convert_to_local_path(f'/opt/share/PB DB/pb_stock_{bulan}_{fdate}.xlsx')
         print(len(df_tok))
         print(max_rows)
         if len(df_tok) <= max_rows:
@@ -340,7 +340,7 @@ def get_stock_monthly_parquet(tglEND,expot_excel):
         print(f'pb_stock_{bulan}_{fdate} Selesai')
         return df_tok
     elif expot_excel == 'parquet':
-        parquet_base = "/opt/share/PB DB/stock"
+        parquet_base = convert_to_local_path("/opt/share/PB DB/stock")
         write_stock_parquet(df_tok, parquet_base)
 
     print(f'pb_stock_{bulan}_{fdate} Selesai')
@@ -398,7 +398,7 @@ def get_stock_monthly_parquet_bz(tglEND,expot_excel):
     df_tok['bulan'] = month
     if expot_excel == 'yes':
         max_rows = 1048570
-        output_file = f'/opt/share/PB DB/pb_stock_{bulan}_{fdate}.xlsx'
+        output_file = convert_to_local_path(f'/opt/share/PB DB/pb_stock_{bulan}_{fdate}.xlsx')
         print(len(df_tok))
         print(max_rows)
         if len(df_tok) <= max_rows:
@@ -416,7 +416,7 @@ def get_stock_monthly_parquet_bz(tglEND,expot_excel):
         print(f'pb_stock_{bulan}_{fdate} Selesai')
         return df_tok
     elif expot_excel == 'parquet':
-        parquet_base = "/opt/share/PB DB/stock"
+        parquet_base = convert_to_local_path("/opt/share/PB DB/stock")
         write_stock_parquet(df_tok, parquet_base, bz=True)
 
     print(f'pb_stock_{bulan}_{fdate} Selesai')
@@ -539,7 +539,7 @@ def md_status_artikel():
                 col_ket=['fv_configname'])
     df=df[['fv_barcode','fn_whconsiid','status']].drop_duplicates()
     
-    df.to_excel('/opt/share/For MD/status_artikel.xlsx', index=False)
+    df.to_excel(convert_to_local_path('/opt/share/For MD/status_artikel.xlsx'), index=False)
 
 def md_artikel_size():
     df_cus= df__cus()
@@ -609,7 +609,7 @@ def md_artikel_size():
     chunks = 3
     chunk_size = math.ceil(total_rows / chunks)  # otomatis bagi 3
 
-    with pd.ExcelWriter('/opt/share/For MD/stock artikel all store 2025.xlsx', engine='xlsxwriter') as writer:
+    with pd.ExcelWriter(convert_to_local_path('/opt/share/For MD/stock artikel all store 2025.xlsx'), engine='xlsxwriter') as writer:
         for i in range(chunks):
             start_row = i * chunk_size
             end_row = min(start_row + chunk_size, total_rows)
@@ -658,9 +658,7 @@ def md_artikel_size_26():
         df_sq25.drop(columns=['fn_cusid'], inplace=True)
 
     # 4. Rename & Reorder Kolom
-    base_path = fr'/opt/share/for MD/'
-    # base_path = fr"\\192.168.1.254\Share\_From Valdi\for MD"
-    excel_path=fr'{base_path}status_artikel.xlsx'
+    excel_path = convert_to_local_path('/opt/share/for MD/status_artikel.xlsx')
     df_excel = pd.read_excel(excel_path)
     df_excel['status']=df_excel['status'].replace({"SEHAT":"OK"})
     # Merge status kembali ke dataframe utama (Garansi 1-to-1 match, tidak ada duplikasi)
@@ -710,7 +708,14 @@ def md_artikel_size_26():
     chunks = 3
     chunk_size = math.ceil(total_rows / chunks)
     columns = list(df_sq25.columns)
-    excel_path = '/opt/share/For MD/stock artikel all store 2026.xlsx'
+    excel_path = convert_to_local_path('/opt/share/For MD/stock artikel all store 2026.xlsx')
+    if os.path.exists(excel_path):
+        try:
+            with open(excel_path, 'ab'):
+                pass
+        except PermissionError:
+            excel_path = excel_path.replace('.xlsx', '_NEW.xlsx')
+            print(f"⚠️ [FILE LOCKED] File utama sedang dibuka user lain, dialihkan ke: {excel_path}", flush=True)
     
     print(f"Mulai menulis {total_rows:,} baris ke Excel ({excel_path}) dalam {chunks} sheets...", flush=True)
     import xlsxwriter
@@ -730,7 +735,12 @@ def md_artikel_size_26():
             worksheet.write_row(r_idx, 0, cleaned_row)
         del chunk_df
         gc.collect()
-    workbook.close()
+    try:
+        workbook.close()
+    except Exception as e:
+        workbook.filename = excel_path.replace('.xlsx', '_NEW.xlsx')
+        print(f"⚠️ [FILE LOCKED SAAT CLOSE] Menyimpan ke {workbook.filename} ({e})", flush=True)
+        workbook._store_workbook()
     del df_sq25
     gc.collect()
     print("✅ Selesai diproses ke Excel dengan aman tanpa OOM dan seluruh data terisi utuh!", flush=True)
@@ -891,6 +901,14 @@ def artikel_size_value_26():
     chunk_size = math.ceil(total_rows / chunks)
     columns = list(df_sq.columns)
 
+    if os.path.exists(output_excel_path):
+        try:
+            with open(output_excel_path, 'ab'):
+                pass
+        except PermissionError:
+            output_excel_path = output_excel_path.replace('.xlsx', '_NEW.xlsx')
+            print(f"⚠️ [FILE LOCKED] File utama sedang dibuka user lain, dialihkan ke: {output_excel_path}", flush=True)
+
     print(f"[INFO] Mulai menulis {total_rows:,} baris ke Excel ({output_excel_path}) dalam {chunks} sheets...", flush=True)
     import xlsxwriter
     workbook = xlsxwriter.Workbook(output_excel_path, {'constant_memory': True, 'nan_inf_to_errors': True})
@@ -915,11 +933,15 @@ def artikel_size_value_26():
         del sheet_df
         gc.collect()
 
-    workbook.close()
+    try:
+        workbook.close()
+    except Exception as e:
+        workbook.filename = output_excel_path.replace('.xlsx', '_NEW.xlsx')
+        print(f"⚠️ [FILE LOCKED SAAT CLOSE] Menyimpan ke {workbook.filename} ({e})", flush=True)
+        workbook._store_workbook()
     del df_sq
     gc.collect()
     print(f"✅ [INFO] Selesai artikel_size_value_26 dalam {time.time() - t_start:.2f} detik. File: {output_excel_path}", flush=True)
-    return df_sq
 
 
 def md_artikel_size2():
@@ -1017,8 +1039,8 @@ def md_artikel_size2():
     df2[['status','status_toko']]=df2[['status','status_toko']].replace({"SEHAT":"OK"})
     df2r=df2.select_dtypes(include='number').sum()
     # Save ke Excel (Gunakan engine 'xlsxwriter' untuk efisiensi jika perlu)
-    df2.to_excel('/opt/share/For MD/stock artikel all time.xlsx', index=False)
-    df2r.to_excel('/opt/share/For MD/artsize_gd_result.xlsx')
+    df2.to_excel(convert_to_local_path('/opt/share/For MD/stock artikel all time.xlsx'), index=False)
+    df2r.to_excel(convert_to_local_path('/opt/share/For MD/artsize_gd_result.xlsx'))
     # df2[['artikel','status','status_toko']].drop_duplicates().to_excel('/opt/share/For MD/status_artikel.xlsx', index=False)
 
     # Save artsize_gd_result ke Parquet per tanggal untuk tracking harian
@@ -1042,11 +1064,134 @@ def md_artikel_size2():
 
     return df2
 
+
+def summary_stock_artikel():
+    """Buat summary per artikel (condition, Store, Warehouse, sales, rating, gross, net, event) dari hasil md_artikel_size2()."""
+    import io
+
+    excel_path = convert_to_local_path('/opt/share/For MD/stock artikel all time.xlsx')
+    if not os.path.exists(excel_path):
+        raise FileNotFoundError(f"File sumber tidak ditemukan: {excel_path}")
+
+    print(f"[INFO] Membaca {excel_path}...", flush=True)
+    # Muat ke BytesIO sekaligus agar tidak lambat karena SMB random-access XML parsing
+    with open(excel_path, 'rb') as f:
+        excel_bytes = io.BytesIO(f.read())
+
+    header_cols = pd.read_excel(excel_bytes, nrows=0).columns.tolist()
+    current_year_col = f'stock akhir {datetime.now().year}'
+    if current_year_col in header_cols:
+        stock_store_col = current_year_col
+    elif 'stock akhir 2026' in header_cols:
+        stock_store_col = 'stock akhir 2026'
+    else:
+        stock_cols = sorted([c for c in header_cols if str(c).startswith('stock akhir ')])
+        if not stock_cols:
+            raise KeyError("Kolom 'stock akhir <tahun>' tidak ditemukan di stock artikel all time.xlsx")
+        stock_store_col = stock_cols[-1]
+
+    sales_col = 'total sales qty all time'
+    required_cols = ['artikel', 'status', stock_store_col, 'stock gudang', sales_col]
+    missing_cols = [c for c in required_cols if c not in header_cols]
+    if missing_cols:
+        raise KeyError(f"Kolom wajib tidak ditemukan di {excel_path}: {missing_cols}")
+
+    excel_bytes.seek(0)
+    df = pd.read_excel(
+        excel_bytes,
+        usecols=required_cols,
+        dtype={'artikel': str, 'status': str},
+    )
+    del excel_bytes
+    gc.collect()
+
+    df = df.dropna(subset=['artikel'])
+    for num_col in (stock_store_col, 'stock gudang', sales_col):
+        df[num_col] = pd.to_numeric(df[num_col], errors='coerce').fillna(0)
+
+    df_summary = (
+        df.groupby('artikel', as_index=False, sort=True)
+        .agg({
+            'status': 'first',
+            stock_store_col: 'sum',
+            'stock gudang': 'sum',
+            sales_col: 'sum',
+        })
+        .rename(columns={
+            'status': 'condition',
+            stock_store_col: 'Store',
+            'stock gudang': 'Warehouse',
+            sales_col: 'sales',
+        })
+    )
+
+    del df
+    gc.collect()
+
+    # Ambil atribut master artikel (fv_rating, fm_price, fm_amount, fv_namemark) dari artikel_pb
+    df_art = df_artikel_pb_(
+        'fv_barcode, fv_rating, fm_price, fm_amount, fv_namemark',
+        distinct=True,
+    )
+    df_art['fv_barcode'] = df_art['fv_barcode'].astype(str)
+    df_art = (
+        df_art.dropna(subset=['fv_barcode'])
+        .drop_duplicates(subset=['fv_barcode'], keep='first')
+        .rename(columns={
+            'fv_barcode': 'artikel',
+            'fm_price': 'gross',
+            'fm_amount': 'net',
+            'fv_namemark': 'event',
+        })
+    )
+
+    rating_map = {'fast moving': 3, 'slow moving': 2, 'fail': 1, 'none': '-'}
+    df_art['rating'] = (
+        df_art['fv_rating']
+        .fillna('none')
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .map(rating_map)
+        .fillna('-')
+    )
+    df_art = df_art[['artikel', 'rating', 'gross', 'net', 'event']]
+
+    df_summary = pd.merge(df_summary, df_art, on='artikel', how='left')
+    del df_art
+    gc.collect()
+
+    df_summary['rating'] = df_summary['rating'].fillna('-')
+    for num_col in ('gross', 'net'):
+        df_summary[num_col] = pd.to_numeric(df_summary[num_col], errors='coerce').fillna(0)
+
+    df_summary = df_summary[['artikel', 'condition', 'Store', 'Warehouse', 'sales', 'rating', 'gross', 'net', 'event']]
+
+    for col in ('Store', 'Warehouse', 'sales', 'gross', 'net'):
+        if (df_summary[col] % 1 == 0).all():
+            df_summary[col] = df_summary[col].astype('int64')
+
+    output_path = convert_to_local_path('/opt/share/For MD/summary stock artikel.xlsx')
+    try:
+        df_summary.to_excel(output_path, index=False)
+    except PermissionError:
+        fallback_path = output_path.replace('.xlsx', '_NEW.xlsx')
+        print(f"⚠️ [FILE LOCKED] Menyimpan hasil ke: {fallback_path}", flush=True)
+        df_summary.to_excel(fallback_path, index=False)
+        output_path = fallback_path
+
+    print(
+        f"✅ Summary stock artikel tersimpan: {output_path} "
+        f"({len(df_summary):,} artikel | Store={df_summary['Store'].sum():,.0f} | "
+        f"Warehouse={df_summary['Warehouse'].sum():,.0f} | sales={df_summary['sales'].sum():,.0f})",
+        flush=True,
+    )
+    del df_summary
+    gc.collect()
+
+
 def stock_by_artikel():
-    base_path = fr'/opt/share/for MD/'
-    base_path_input = fr'/opt/share/for Alokator/'
-    # base_path = fr"\\192.168.1.254\Share\_From Valdi\for MD"
-    excel_path=fr'{base_path}stock artikel all store 2026.xlsx'
+    excel_path = convert_to_local_path('/opt/share/for MD/stock artikel all store 2026.xlsx')
     all_sheets = pd.read_excel(excel_path, sheet_name=None)
     # Menggabungkan semua DataFrame dalam dictionary menjadi 1 DataFrame
     df_excel = pd.concat(all_sheets.values(), ignore_index=True)
@@ -1054,7 +1199,7 @@ def stock_by_artikel():
     kolom_group=['toko','code toko','artikel','bot/top','status']
     kolom_numerik = [col for col in df_excel.columns if col not in kolom_group]
     df_grouped = df_excel.groupby(kolom_group, as_index=False,)[kolom_numerik].sum()
-    df_grouped.to_excel(r"/opt/share/for Alokator/stock by artikel all store 2026.xlsx",index=False)
+    df_grouped.to_excel(convert_to_local_path("/opt/share/for Alokator/stock by artikel all store 2026.xlsx"), index=False)
 
 def sales_qty_value(year):
     df=df__pb_penjualan_(year)
@@ -1194,18 +1339,18 @@ def count_artikel():
 
 def stock_borken_aging():
     # --- LOGIKA SEBELUM LOOP (TETAP SAMA) ---
-    df_pend = df__draft_pending(colom="a.fv_nodraft,fc_type,a.fc_status,b.fc_status,a.fn_whconsiid2,a.fn_whconsiid,fv_artsizecode,fn_on_book", a__fc_status="X", b__fc_status="X")
+    df_pend = df__draft_pending(colom="a.fv_nodraft,fc_type,a.fc_status,b.fc_status,a.fn_whconsiid2,a.fn_whconsiid,fv_artsizecode,fn_on_book,b.fn_userid", a__fc_status="X", b__fc_status="X")
 
-    df_rt = df_pend.loc[df_pend['fc_type']=="RT", ['fn_whconsiid','fv_artsizecode','fn_on_book']].rename(columns={"fn_on_book":"fn_qty"})
-    df_mo = df_pend.loc[df_pend['fc_type']=="MO", ['fn_whconsiid','fv_artsizecode','fn_on_book']].rename(columns={"fn_on_book":"fn_qty"})
-    df_mi = df_pend.loc[df_pend['fc_type']=="MO", ['fn_whconsiid2','fv_artsizecode','fn_on_book']].rename(columns={"fn_whconsiid2":"fn_whconsiid","fn_on_book":"fn_qty"})
-    df_ob = df_pend.loc[df_pend['fc_type']=="OB", ['fn_whconsiid2','fv_artsizecode','fn_on_book']].rename(columns={"fn_whconsiid2":"fn_whconsiid","fn_on_book":"fn_qty"})
+    df_rt = df_pend.loc[df_pend['fc_type']=="RT", ['fn_whconsiid','fv_artsizecode','fn_on_book','fn_userid']].rename(columns={"fn_on_book":"fn_qty"})
+    df_mo = df_pend.loc[df_pend['fc_type']=="MO", ['fn_whconsiid','fv_artsizecode','fn_on_book','fn_userid']].rename(columns={"fn_on_book":"fn_qty"})
+    df_mi = df_pend.loc[df_pend['fc_type']=="MO", ['fn_whconsiid2','fv_artsizecode','fn_on_book','fn_userid']].rename(columns={"fn_whconsiid2":"fn_whconsiid","fn_on_book":"fn_qty"})
+    df_ob = df_pend.loc[df_pend['fc_type']=="OB", ['fn_whconsiid2','fv_artsizecode','fn_on_book','fn_userid']].rename(columns={"fn_whconsiid2":"fn_whconsiid","fn_on_book":"fn_qty"})
 
     df_cus = df__customers_pb_("fn_cusid,fn_whconsiid")
-    df_ostdo = df__otsdo()[['fn_whconsiid','fv_artsizecode','fn_qty']].dropna(subset='fn_whconsiid')
-    df_ostdm = df__otsdm()[['fn_whconsiid2','fv_artsizecode','fn_qty']].rename(columns={"fn_whconsiid2":"fn_whconsiid"})
-    df_ostob = df__otsob()[['fn_cusid','fv_artsizecode','OstOB']].rename(columns={"OstOB":"fn_qty"})
-    df_ostob = df_ostob.merge(df_cus, how='left', on='fn_cusid')[['fn_whconsiid','fv_artsizecode','fn_qty']]
+    df_ostdo = df__otsdo()[['fn_whconsiid','fv_artsizecode','fn_qty','fn_userid']].dropna(subset='fn_whconsiid')
+    df_ostdm = df__otsdm()[['fn_whconsiid2','fv_artsizecode','fn_qty','fn_userid']].rename(columns={"fn_whconsiid2":"fn_whconsiid"})
+    df_ostob = df__otsob()[['fn_cusid','fv_artsizecode','OstOB','fn_userid']].rename(columns={"OstOB":"fn_qty"})
+    df_ostob = df_ostob.merge(df_cus, how='left', on='fn_cusid')[['fn_whconsiid','fv_artsizecode','fn_qty','fn_userid']]
 
     # 1. Ubah nilai fn_qty & tambah label asal
     df_rt['fn_qty'] = -df_rt['fn_qty']
@@ -1223,6 +1368,13 @@ def stock_borken_aging():
     df_combined = pd.concat([df_rt, df_mo, df_mi, df_ob, df_ostdo, df_ostdm, df_ostob], ignore_index=True)
     df_result = df_combined.groupby(['fn_whconsiid', 'fv_artsizecode'], as_index=False)['fn_qty'].sum()
 
+    # Tambahkan User Input dari user_tb untuk export
+    df_user = df__user('fn_userid, fv_username')
+    df_combined = df_combined.merge(df_user, how='left', on='fn_userid').rename(columns={'fv_username': 'User Input'})
+    df_combined['User Input'] = df_combined['User Input'].fillna('-')
+    if 'fn_userid' in df_combined.columns:
+        df_combined = df_combined.drop(columns=['fn_userid'])
+
     # Export Detail Pendingan
     df_art = df__artikel_pb("fv_artsizecode,fv_barcode, fv_sizename, fv_configname")
     df_cus = df__customers_pb_('fn_whconsiid, concat(fc_code," - ", fv_toko," - ",fv_kota) Toko', distinct=False, where='')
@@ -1230,7 +1382,7 @@ def stock_borken_aging():
     df_combined_export = df_art.merge(df_combined, how='right', on='fv_artsizecode')
     df_combined_export = df_cus.merge(df_combined_export, how='right', on='fn_whconsiid')
 
-    excel_path = f'/opt/share/For Alokator/Detail Pendingan.xlsx'
+    excel_path = convert_to_local_path('/opt/share/For Alokator/Detail Pendingan.xlsx')
     df_combined_export.to_excel(excel_path, index=False)
 
     # Olah df_result
@@ -1257,8 +1409,8 @@ def stock_borken_aging():
 
     # Buat daftar target DataFrame dan path output-nya
     tasks = [
-        (df, f'/opt/share/For Alokator/Data broken aging.xlsx'),
-        (df_future, f'/opt/share/For Alokator/Data broken aging future.xlsx')
+        (df, convert_to_local_path('/opt/share/For Alokator/Data broken aging.xlsx')),
+        (df_future, convert_to_local_path('/opt/share/For Alokator/Data broken aging future.xlsx'))
     ]
 
     for current_df, output_file in tasks:
@@ -1396,7 +1548,7 @@ def fstok_gudang():
                         'fv_configname':'Top/Bottom',
                         'fv_rating':'Rating',
                     })
-    nama_file = f'/opt/share/For Alokator/Freestock Gudang.xlsx'
+    nama_file = convert_to_local_path('/opt/share/For Alokator/Freestock Gudang.xlsx')
     # df_combi[['fv_barcode','fn_qty']].rename(columns={
     #                 'fv_barcode':'Artikel',
     #                 'fn_qty':'Jumlah Freestock',
@@ -1502,7 +1654,7 @@ def mini_consigment_sales(year):
            'fn_jualpersize','fv_namemark','fn_tabel','fn_total_disc2']]
     print(df.info())
     df=rename_col_sql_to_xlsx_gis(df)
-    output_folder = f'/opt/share/For Alokator/Sales cosiment/{year}'
+    output_folder = convert_to_local_path(f'/opt/share/For Alokator/Sales cosiment/{year}')
     df['Sales Date'] = pd.to_datetime(df['Sales Date'])
     # Tambahkan kolom bulan (format YYYY-MM)
     df['bulan_num'] = df['Sales Date'].dt.strftime('%m')
@@ -1580,7 +1732,7 @@ def ost_ob():
     df_ostob_=df_art.merge(df_ostob_,how='right',on='fv_artsizecode').drop(columns='fv_artsizecode')
     df_ostob_=df_cus.merge(df_ostob_,how='right',on='fn_cusid').drop(columns='fn_cusid')
     df_ostob_=df_ostob_.merge(df_user,how='left',on='fn_userid').drop(columns='fn_userid')
-    nama_file = fr"/opt/share/For Alokator/Out Standing OB.xlsx"
+    nama_file = convert_to_local_path("/opt/share/For Alokator/Out Standing OB.xlsx")
     df_ostob_.to_excel(f'{nama_file}',index=False)
     return
 
@@ -1593,7 +1745,7 @@ def ost_do():
     df_ostdo_=df_art.merge(df_ostdo_,how='right',on='fv_artsizecode').drop(columns='fv_artsizecode')
     df_ostdo_=df_cus.merge(df_ostdo_,how='right',on='fn_cusid').drop(columns='fn_cusid')
     df_ostdo_=df_ostdo_.merge(df_user,how='left',on='fn_userid').drop(columns='fn_userid')
-    nama_file = fr"/opt/share/For Alokator/Out Standing DO.xlsx"
+    nama_file = convert_to_local_path("/opt/share/For Alokator/Out Standing DO.xlsx")
     df_ostdo_.to_excel(f'{nama_file}',index=False)
     return
 
@@ -1657,7 +1809,7 @@ def master_gudang():
                         'fv_configname':'Top/Bottom',
                         'fv_rating':'Rating',
                     })
-    nama_file = fr"/opt/share/For Alokator/Data Master Gudang.xlsx"
+    nama_file = convert_to_local_path("/opt/share/For Alokator/Data Master Gudang.xlsx")
     df_piv3.to_excel(f'{nama_file}',index=False)
     return
 def upsert_master(): 
@@ -1665,7 +1817,8 @@ def upsert_master():
     df_aging=df__aging_gudang_pb()
     df2=df2.merge(df_aging,how='left',on='fn_articleid').rename(columns={
                         'fn_hari_fdo':'aging'})
-    df2.to_excel('/opt/share/For Alokator/MASTER ARTIKEL.xlsx', index=False)
+    df2['fm_cogs']=0
+    df2.to_excel(convert_to_local_path('/opt/share/For Alokator/MASTER ARTIKEL.xlsx'), index=False)
 
 def upsert_artikel_pb():
     df= df__artikel_pb_read()
@@ -1721,8 +1874,11 @@ def upsert_artikel_pb():
             print(col)
 
 def upsert_customers_pb():
-    base_path = fr'/opt/share/PB DB/'
-    base_path2 = fr'/opt/share/For Alokator/'
+    base_path = convert_to_local_path('/opt/share/PB DB') + os.sep
+    alt_base = r'C:\Users\IT-ANALIS\Documents\254\pbd' + os.sep
+    if not os.path.exists(f'{base_path}customers_pb_sup.xlsx') and os.path.exists(f'{alt_base}customers_pb_sup.xlsx'):
+        base_path = alt_base
+    base_path2 = convert_to_local_path('/opt/share/For Alokator') + os.sep
     excel_path = f'{base_path}customers_pb_sup.xlsx'
     csv_path = f'{base_path}list user & employee.csv'
     pic_path = f'{base_path}LIST PIC MARKETING.xlsx'
@@ -1742,27 +1898,28 @@ def upsert_customers_pb():
     #     start + 1,
     #     start + 1 + mask.sum()
     # )
-    df_excel = pd.read_excel(excel_path)
+    df_excel = pd.read_excel(excel_path).drop_duplicates(subset=['fn_cusid'], keep='first')
     emp_tb=pd.read_csv(csv_path)
     emp_tb['fn_userid']=emp_tb['fn_userid'].astype(int)
     df_user=df__cus_user()
     df_user=pd.merge(df_user,emp_tb[['fn_userid','fv_nameemployees']],on='fn_userid',how='left')
     df_user['fn_cusid']=df_user['fn_cusid'].astype(int)
     df=pd.merge(df,df_user[['fn_cusid','fv_nameemployees']],on='fn_cusid',how='left')
-    df=df.loc[~df['fn_whconsiid'].duplicated()]
+    df=df.drop_duplicates(subset=['fn_cusid'], keep='first')
+    df=df.loc[~df['fn_whconsiid'].duplicated() | df['fn_whconsiid'].isna()]
     df=pd.merge(df, df_excel, on='fn_cusid', how='left')
 
     df_picmkt=pd.read_excel(pic_path, header=3).dropna(how='all')
     df_picmkt['SUPERVISOR/ OJT**'] = df_picmkt['SUPERVISOR/ OJT**'].str.replace(r'[^A-Za-z\s]', '', regex=True).str.strip().str.title()
     df=pd.merge(df,df_picmkt[['MANAGER','SUPERVISOR/ OJT**','KODE TOKO GIS']],left_on='code',right_on='KODE TOKO GIS',how='left')
-    df=df.rename(columns={'MANAGER_y':'MANAGER'})
-    df['SUPERVISOR']=df['SUPERVISOR/ OJT**']
+    df['MANAGER']=df['MANAGER_y'].combine_first(df['MANAGER_x'])
+    df['SUPERVISOR']=df['SUPERVISOR/ OJT**'].combine_first(df['SUPERVISOR'])
 
         # 1. Baca PIC MIC
     df_picmic = pd.read_excel(mic_path).dropna(how='all')
-    picmic_cols = [c for c in ['PIC MIC', 'STORE GIS'] if c in df_picmic.columns]
+    picmic_cols = [c for c in ['PIC MIC', 'STORE GIS', 'SPG Konsinetto'] if c in df_picmic.columns]
     if 'STORE GIS' in picmic_cols:
-        df = pd.merge(df, df_picmic[picmic_cols], left_on='code', right_on='STORE GIS', how='left').fillna('-')
+        df = pd.merge(df, df_picmic[picmic_cols], left_on='code', right_on='STORE GIS', how='left')
 
     # 2. Baca data toko Alokator (mic_path2)
     df_alokator = pd.read_excel(mic_path2).dropna(how='all')
@@ -1781,26 +1938,28 @@ def upsert_customers_pb():
 
     # Merge jika kolom tersedia
     if 'kode_toko' in df_alokator.columns and 'pic' in df_alokator.columns:
-        df = pd.merge(df, df_alokator[['kode_toko', 'pic']], left_on='code', right_on='kode_toko', how='left').fillna('-')
-        df['Alokator'] = df['pic']
+        df = pd.merge(df, df_alokator[['kode_toko', 'pic']], left_on='code', right_on='kode_toko', how='left')
+        df['Alokator'] = df['pic'].combine_first(df.get('Alokator')).fillna('-')
     else:
         print(f"⚠️ Kolom 'kode_toko' / 'pic' tidak ditemukan di {mic_path2}. Kolom terbaca: {df_alokator.columns.tolist()}")
-        df['Alokator'] = '-'
+        df['Alokator'] = df.get('Alokator', pd.Series('-', index=df.index)).fillna('-')
 
     df.loc[df['fn_cusid'] == 915, 'fn_whconsiid'] = 9000
     
     # Gunakan errors='ignore' agar tidak KeyError jika ada kolom yang tidak terdaftar
-    drop_cols = ['KODE TOKO GIS', 'MANAGER_x', 'SUPERVISOR/ OJT**', 'STORE GIS', 'PIC MIC', 'pic', 'kode_toko']
+    drop_cols = ['KODE TOKO GIS', 'MANAGER_x', 'MANAGER_y', 'SUPERVISOR/ OJT**', 'STORE GIS', 'PIC MIC', 'pic', 'kode_toko']
     df = df.drop(columns=drop_cols, errors='ignore')
+    if 'SPG Konsinetto' in df.columns:
+        df = df.rename(columns={'SPG Konsinetto': 'fv_spg_kosninetto'})
 
     if df is None or df.empty:
         print("❌ DataFrame kosong! Upsert dibatalkan.")
     else:
         print("✅ Data berhasil di-load dengan kolom:", df.columns.tolist())
     df = process_data_cus(df)
-    df = df.where(pd.notnull(df), None)
+    df = df.astype(object).where(pd.notnull(df), None)
     
-    upsert_data('imp',table_name,df, primary_key='customers_pb')
+    upsert_data('imp',table_name,df, primary_key='fn_whconsiid')
 
 def upsert_tgl_so_sa():
     df=df__tglsa_()
